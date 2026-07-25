@@ -431,7 +431,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   Widget build(BuildContext context) {
     final visible = visibleBooks;
     return Scaffold(
-      backgroundColor: const Color(0xffeee7da),
+      backgroundColor: const Color(0xff000000),
       floatingActionButton: books.isEmpty
           ? null
           : FloatingActionButton.extended(
@@ -457,13 +457,13 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                             fontFamily: 'serif',
                             fontSize: 34,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xff382d25),
+                            color: Color(0xfff4f1ea),
                           ),
                         ),
                         Text(
                           '你的私人書架',
                           style: TextStyle(
-                            color: Color(0xff8a6b58),
+                            color: Color(0xffa6a09a),
                             letterSpacing: 1.5,
                           ),
                         ),
@@ -508,7 +508,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                           icon: const Icon(Icons.close_rounded),
                         ),
                   filled: true,
-                  fillColor: const Color(0xfff8f3ea),
+                  fillColor: const Color(0xff151515),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
                     borderSide: BorderSide.none,
@@ -521,7 +521,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
               child: books.isEmpty && !loading
                   ? _EmptyShelf(onImport: _showImportMenu)
                   : visible.isEmpty
-                  ? const Center(child: Text('找不到符合的書籍'))
+                  ? const Center(
+                      child: Text(
+                        '找不到符合的書籍',
+                        style: TextStyle(color: Color(0xffd8d8d8)),
+                      ),
+                    )
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(18, 2, 18, 100),
                       itemCount: visible.length,
@@ -539,12 +544,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                             alignment: Alignment.centerRight,
                             padding: const EdgeInsets.only(right: 26),
                             decoration: BoxDecoration(
-                              color: const Color(0xff755842),
+                              color: const Color(0xff2a2a2a),
                               borderRadius: BorderRadius.circular(18),
                             ),
                             child: const Icon(
                               Icons.more_horiz,
-                              color: Colors.white,
+                              color: Color(0xfff2f2f2),
                             ),
                           ),
                           child: _BookTile(
@@ -606,7 +611,7 @@ class _BookTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final percent = (book.progressRatio.clamp(0, 1) * 100).round();
     return Material(
-      color: const Color(0xfffbf7ef),
+      color: const Color(0xff141414),
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
@@ -633,13 +638,14 @@ class _BookTile extends StatelessWidget {
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w700,
+                              color: Color(0xfff3f3f3),
                             ),
                           ),
                         ),
                         if (book.isFinished)
                           const Icon(
                             Icons.check_circle,
-                            color: Color(0xff62745a),
+                            color: Color(0xff8db89d),
                             size: 19,
                           ),
                       ],
@@ -649,7 +655,7 @@ class _BookTile extends StatelessWidget {
                       book.author,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Color(0xff796c61)),
+                      style: const TextStyle(color: Color(0xffb3b3b3)),
                     ),
                     const SizedBox(height: 10),
                     Row(
@@ -661,8 +667,8 @@ class _BookTile extends StatelessWidget {
                           ),
                           decoration: BoxDecoration(
                             color: book.sourceType == BookSourceType.local
-                                ? const Color(0xffe7ddd0)
-                                : const Color(0xffdbe6df),
+                              ? const Color(0xff2d241d)
+                              : const Color(0xff1d2a26),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
@@ -678,6 +684,7 @@ class _BookTile extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
+                            color: Color(0xfff3f3f3),
                           ),
                         ),
                       ],
@@ -688,8 +695,8 @@ class _BookTile extends StatelessWidget {
                       child: LinearProgressIndicator(
                         value: book.progressRatio.clamp(0, 1),
                         minHeight: 5,
-                        color: const Color(0xff755842),
-                        backgroundColor: const Color(0xffe5ddd2),
+                        color: const Color(0xff8d7b6a),
+                        backgroundColor: const Color(0xff2a2a2a),
                       ),
                     ),
                     const SizedBox(height: 7),
@@ -697,7 +704,7 @@ class _BookTile extends StatelessWidget {
                       _lastRead(book.lastReadAt),
                       style: const TextStyle(
                         fontSize: 11,
-                        color: Color(0xff998b7d),
+                        color: Color(0xff8f8f8f),
                       ),
                     ),
                   ],
@@ -745,18 +752,18 @@ class _BookCover extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: book.sourceType == BookSourceType.local
-            ? const Color(0xff765644)
-            : const Color(0xff536c63),
+            ? const Color(0xff4c3a2f)
+            : const Color(0xff3b4c46),
         borderRadius: BorderRadius.circular(9),
         boxShadow: const [
-          BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(2, 4)),
+          BoxShadow(color: Colors.black54, blurRadius: 8, offset: Offset(2, 4)),
         ],
       ),
       child: Text(
         label,
         textAlign: TextAlign.center,
         style: const TextStyle(
-          color: Color(0xfffff8ea),
+          color: Color(0xfff2f2f2),
           fontFamily: 'serif',
           fontSize: 17,
           fontWeight: FontWeight.w700,
@@ -779,18 +786,22 @@ class _EmptyShelf extends StatelessWidget {
           const Icon(
             Icons.auto_stories_outlined,
             size: 72,
-            color: Color(0xffa99482),
+            color: Color(0xff6f6f6f),
           ),
           const SizedBox(height: 20),
           const Text(
             '書架還是空的',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              color: Color(0xfff2f2f2),
+            ),
           ),
           const SizedBox(height: 8),
           const Text(
             '匯入 TXT，或先保存一本網路書籍',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Color(0xff827467)),
+            style: TextStyle(color: Color(0xffa8a8a8)),
           ),
           const SizedBox(height: 24),
           FilledButton.icon(

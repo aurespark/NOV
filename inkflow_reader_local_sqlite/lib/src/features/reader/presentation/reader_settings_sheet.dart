@@ -5,7 +5,7 @@ import '../../../core/services/font_loader_service.dart';
 import '../domain/reader_models.dart';
 import 'reader_controller.dart';
 
-class ReaderSettingsSheet extends ConsumerWidget {
+class ReaderSettingsSheet extends ConsumerStatefulWidget {
   const ReaderSettingsSheet({
     required this.chapters,
     required this.currentOffset,
@@ -18,12 +18,62 @@ class ReaderSettingsSheet extends ConsumerWidget {
   final ValueChanged<ChapterMarker> onChapterSelected;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReaderSettingsSheet> createState() =>
+      _ReaderSettingsSheetState();
+}
+
+class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
+  static const _chapterItemExtent = 64.0;
+  final ScrollController _chapterController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
+  }
+
+  @override
+  void didUpdateWidget(covariant ReaderSettingsSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentOffset != widget.currentOffset ||
+        oldWidget.chapters != widget.chapters) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
+    }
+  }
+
+  @override
+  void dispose() {
+    _chapterController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToCurrent() {
+    if (!mounted || !_chapterController.hasClients || widget.chapters.isEmpty) {
+      return;
+    }
+    final currentChapter = widget.chapters.lastWhere(
+      (chapter) => chapter.offset <= widget.currentOffset,
+      orElse: () => widget.chapters.first,
+    );
+    final index = widget.chapters.indexOf(currentChapter);
+    if (index <= 0) {
+      _chapterController.jumpTo(0);
+      return;
+    }
+    final target = (index * _chapterItemExtent - 96)
+        .clamp(0.0, _chapterController.position.maxScrollExtent);
+    _chapterController.jumpTo(target);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = this.ref;
     final value = ref.watch(readerSettingsProvider);
     final controller = ref.read(readerSettingsProvider.notifier);
     void set(ReaderSettings v) => controller.update(v);
+    final chapters = widget.chapters;
     final currentChapter = chapters.lastWhere(
-      (chapter) => chapter.offset <= currentOffset,
+      (chapter) => chapter.offset <= widget.currentOffset,
       orElse: () => chapters.first,
     );
     final chapterPanel = Column(
@@ -38,26 +88,31 @@ class ReaderSettingsSheet extends ConsumerWidget {
         ),
         Expanded(
           child: ListView.builder(
+            controller: _chapterController,
+            itemExtent: _chapterItemExtent,
             itemCount: chapters.length,
             itemBuilder: (_, index) {
               final chapter = chapters[index];
               final selected = chapter.offset == currentChapter.offset;
-              return ListTile(
-                dense: true,
-                selected: selected,
-                selectedTileColor: const Color(0xffeadfd3),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+              return Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  dense: true,
+                  selected: selected,
+                  selectedTileColor: const Color(0xffeadfd3),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  title: Text(
+                    chapter.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    widget.onChapterSelected(chapter);
+                  },
                 ),
-                title: Text(
-                  chapter.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  onChapterSelected(chapter);
-                },
               );
             },
           ),
@@ -205,67 +260,70 @@ class ReaderSettingsSheet extends ConsumerWidget {
         ],
       ),
     );
-    return Container(
-      height: MediaQuery.sizeOf(context).height * .72,
-      padding: EdgeInsets.fromLTRB(
-        16,
-        12,
-        16,
-        14 + MediaQuery.paddingOf(context).bottom,
-      ),
-      decoration: const BoxDecoration(
-        color: Color(0xfffbf8f1),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: Column(
-        children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.black12,
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
+    return Material(
+      color: const Color(0xfffbf8f1),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * .72,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            12,
+            16,
+            14 + MediaQuery.paddingOf(context).bottom,
           ),
-          const SizedBox(height: 14),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, box) {
-                if (box.maxWidth < 600) {
-                  return DefaultTabController(
-                    length: 2,
-                    child: Column(
-                      children: [
-                        const TabBar(
-                          tabs: [
-                            Tab(text: '章節'),
-                            Tab(text: '閱讀設定'),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    if (box.maxWidth < 600) {
+                      return DefaultTabController(
+                        length: 2,
+                        child: Column(
+                          children: [
+                            const TabBar(
+                              tabs: [
+                                Tab(text: '章節'),
+                                Tab(text: '閱讀設定'),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: TabBarView(
+                                children: [chapterPanel, settingsPanel],
+                              ),
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          child: TabBarView(
-                            children: [chapterPanel, settingsPanel],
-                          ),
-                        ),
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(width: 150, child: chapterPanel),
+                        const VerticalDivider(width: 24),
+                        Expanded(child: settingsPanel),
                       ],
-                    ),
-                  );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(width: 150, child: chapterPanel),
-                    const VerticalDivider(width: 24),
-                    Expanded(child: settingsPanel),
-                  ],
-                );
-              },
-            ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

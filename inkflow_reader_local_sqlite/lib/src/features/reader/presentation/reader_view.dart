@@ -173,16 +173,11 @@ class _ReaderViewState extends ConsumerState<ReaderView>
           onChapterSelected: _jumpToChapter,
         ),
       );
-    } else if (enabled && x < .3 && page > 0) {
-      pageController.previousPage(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-      );
-    } else if (enabled && x > .7 && page < pages.length - 1) {
-      pageController.nextPage(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-      );
+    } else if (enabled && (x < .3 || x > .7) && page < pages.length - 1) {
+      final nextPage = page + 1;
+      if (pageController.hasClients) {
+        pageController.jumpToPage(nextPage);
+      }
     }
   }
 

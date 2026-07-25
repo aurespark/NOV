@@ -39,8 +39,8 @@ class ReaderSettings {
     this.fontSize = 21,
     this.lineHeight = 1.75,
     this.letterSpacing = .4,
-    this.backgroundColor = const Color(0xfff4ecd8),
-    this.textColor = const Color(0xff3b332b),
+    this.backgroundColor = const Color(0xff000000),
+    this.textColor = const Color(0xfff2f2f2),
     this.tapPageTurnEnabled = true,
     this.encoding = TextEncoding.auto,
   });

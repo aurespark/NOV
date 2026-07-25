@@ -56,5 +56,43 @@ void main() {
         expect(find.text('字體大小'), findsOneWidget);
       }
     });
+
+    testWidgets('chapter list opens near the current chapter', (tester) async {
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final chapters = List.generate(
+        30,
+        (index) => ChapterMarker('第${index + 1}章', index * 100),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            readerSettingsProvider.overrideWith(
+              TestReaderSettingsController.new,
+            ),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: ReaderSettingsSheet(
+                chapters: chapters,
+                currentOffset: 1700,
+                onChapterSelected: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      final selected = find.text('第18章');
+      expect(selected, findsOneWidget);
+      expect(tester.getTopLeft(selected).dy, lessThan(320));
+      expect(tester.takeException(), isNull);
+    });
   }
 }

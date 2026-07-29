@@ -17,6 +17,7 @@ class Book {
     this.textEncoding,
     this.fileSize,
     this.catalogUrl,
+    this.catalogSelector,
     this.coverPath,
     this.lastReadAt,
   });
@@ -29,6 +30,7 @@ class Book {
   final String? textEncoding;
   final int? fileSize;
   final String? catalogUrl;
+  final String? catalogSelector;
   final String? coverPath;
   final int characterOffset;
   final String currentChapter;
@@ -44,6 +46,7 @@ class Book {
     String? textEncoding,
     int? fileSize,
     String? catalogUrl,
+    String? catalogSelector,
     String? coverPath,
     int? characterOffset,
     String? currentChapter,
@@ -59,6 +62,7 @@ class Book {
     textEncoding: textEncoding ?? this.textEncoding,
     fileSize: fileSize ?? this.fileSize,
     catalogUrl: catalogUrl ?? this.catalogUrl,
+    catalogSelector: catalogSelector ?? this.catalogSelector,
     coverPath: coverPath ?? this.coverPath,
     characterOffset: characterOffset ?? this.characterOffset,
     currentChapter: currentChapter ?? this.currentChapter,
@@ -77,6 +81,7 @@ class Book {
     'textEncoding': textEncoding,
     'fileSize': fileSize,
     'catalogUrl': catalogUrl,
+    'catalogSelector': catalogSelector,
     'coverPath': coverPath,
     'characterOffset': characterOffset,
     'currentChapter': currentChapter,
@@ -95,6 +100,7 @@ class Book {
     textEncoding: map['textEncoding'] as String?,
     fileSize: map['fileSize'] as int?,
     catalogUrl: map['catalogUrl'] as String?,
+    catalogSelector: map['catalogSelector'] as String?,
     coverPath: map['coverPath'] as String?,
     characterOffset: map['characterOffset']! as int,
     currentChapter: map['currentChapter']! as String,

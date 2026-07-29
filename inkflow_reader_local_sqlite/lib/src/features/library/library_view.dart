@@ -6,10 +6,12 @@ import 'package:path/path.dart' as p;
 import '../../core/services/book_file_store.dart';
 import '../../core/services/encoding_service.dart';
 import '../../core/services/library_database.dart';
+import '../../core/services/web_catalog_resolver.dart';
 import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
 import '../reader/presentation/reader_view.dart';
 import 'book.dart';
+import 'web_chapter_list_view.dart';
 
 enum _BookAction { edit, toggleFinished, remove }
 
@@ -130,7 +132,8 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         isFinished: false,
       );
       final chapters = ChapterParser.parse(decoded.text);
-      await LibraryDatabase.instance.insertBook(book, chapters);
+      await LibraryDatabase.instance
+          .insertBook(book, localChapters: chapters);
       savedPath = null;
       if (!mounted) return;
       setState(() => books.insert(0, book));
@@ -172,8 +175,6 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   }
 
   Future<void> _addWeb() async {
-    final title = TextEditingController();
-    final author = TextEditingController();
     final url = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -183,19 +184,16 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: title,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: '書名'),
-            ),
-            TextField(
-              controller: author,
-              decoration: const InputDecoration(labelText: '作者'),
-            ),
-            TextField(
               controller: url,
+              autofocus: true,
               keyboardType: TextInputType.url,
-              decoration: const InputDecoration(labelText: '目錄 URL'),
+              decoration: const InputDecoration(
+                labelText: '目錄 URL',
+                hintText: 'https://example.com/catalog',
+              ),
             ),
+            const SizedBox(height: 10),
+            const Text('只需輸入 URL，系統會自動分析頁面並保存可用資訊。'),
           ],
         ),
         actions: [
@@ -212,32 +210,77 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     );
     if (!mounted || confirmed != true) return;
     final uri = Uri.tryParse(url.text.trim());
-    if (title.text.trim().isEmpty ||
-        uri == null ||
+    if (uri == null ||
         !uri.hasScheme ||
         !(uri.scheme == 'http' || uri.scheme == 'https')) {
-      _message('請輸入書名及有效的 http/https 目錄網址');
+      _message('請輸入有效的 http/https 目錄網址');
       return;
     }
-    final book = Book(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      title: title.text.trim(),
-      author: author.text.trim().isEmpty ? '未知作者' : author.text.trim(),
-      sourceType: BookSourceType.web,
-      catalogUrl: url.text.trim(),
-      characterOffset: 0,
-      currentChapter: '',
-      progressRatio: 0,
-      createdAt: DateTime.now(),
-      isFinished: false,
-    );
-    await LibraryDatabase.instance.insertBook(book, const []);
-    if (mounted) setState(() => books.insert(0, book));
+    setState(() => loading = true);
+    try {
+      final resolver = WebCatalogResolver();
+      final resolution = await resolver.resolve(uri);
+      final book = Book(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        title: _normalizeWebTitle(resolution.pageTitle ?? uri.host),
+        author: '網路書籍',
+        sourceType: BookSourceType.web,
+        catalogUrl: url.text.trim(),
+        catalogSelector: resolution.bestSelector,
+        characterOffset: 0,
+        currentChapter: '',
+        progressRatio: 0,
+        createdAt: DateTime.now(),
+        isFinished: false,
+      );
+
+      final links = resolution.bestCluster?.links;
+      final webChapters = links == null
+          ? null
+          : [
+              for (var i = 0; i < links.length; i++)
+                WebChapter(
+                  url: links[i].href.toString(),
+                  title: links[i].text,
+                  position: i,
+                ),
+            ];
+
+      await LibraryDatabase.instance
+          .insertBook(book, webChapters: webChapters);
+
+      if (mounted) {
+        setState(() => books.insert(0, book));
+        final chapterCount = webChapters?.length ?? 0;
+        final message = chapterCount > 0
+            ? '已保存《${book.title}》，並成功識別 $chapterCount 個章節。'
+            : '已保存《${book.title}》，但未能自動識別章節列表。';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } catch (error) {
+      _message('新增網路書籍失敗：$error');
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  String _normalizeWebTitle(String value) {
+    final cleaned = value.trim();
+    if (cleaned.isEmpty) return '未命名網路書籍';
+    return cleaned.length > 80 ? cleaned.substring(0, 80) : cleaned;
   }
 
   Future<void> _open(Book book, {String? initialText}) async {
     if (book.sourceType == BookSourceType.web) {
-      _message('已保存網路目錄；內容下載需由網站爬蟲模組提供');
+      final chapters = await LibraryDatabase.instance.loadWebChapters(book.id);
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => WebChapterListView(book: book, chapters: chapters),
+        ),
+      );
       return;
     }
     final path = book.localPath;
@@ -584,7 +627,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
             ListTile(
               leading: const Icon(Icons.language_rounded),
               title: const Text('新增網路書籍'),
-              subtitle: const Text('保存書名、作者與目錄 URL'),
+              subtitle: const Text('只需輸入目錄 URL'),
               onTap: () => Navigator.pop(context, BookSourceType.web),
             ),
             const SizedBox(height: 8),

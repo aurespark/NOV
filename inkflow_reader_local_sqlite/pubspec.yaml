@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   flutter_riverpod: ^3.0.3
   file_picker: ^10.3.10
+  http: ^1.2.2
+  html: ^0.15.4
   shared_preferences: ^2.5.5
   path_provider: ^2.1.5
   path: ^1.9.1

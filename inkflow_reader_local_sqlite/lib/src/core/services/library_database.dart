@@ -11,7 +11,7 @@ class LibraryDatabase {
   Future<Database> get database async =>
       _database ??= await openDatabase(
         p.join(await getDatabasesPath(), 'inkflow_reader.db'),
-        version: 1,
+        version: 3,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, _) async {
           await db.execute('''
@@ -24,6 +24,7 @@ class LibraryDatabase {
               textEncoding TEXT,
               fileSize INTEGER,
               catalogUrl TEXT,
+              catalogSelector TEXT,
               coverPath TEXT,
               createdAt TEXT NOT NULL,
               isFinished INTEGER NOT NULL DEFAULT 0
@@ -50,8 +51,34 @@ class LibraryDatabase {
               UNIQUE(bookId, chapterIndex)
             )
           ''');
+          await _createWebChaptersTable(db);
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              'ALTER TABLE books ADD COLUMN catalogSelector TEXT',
+            );
+          }
+          if (oldVersion < 3) {
+            await _createWebChaptersTable(db);
+          }
         },
       );
+
+  Future<void> _createWebChaptersTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE web_chapters(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bookId TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        isDownloaded INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY(bookId) REFERENCES books(id) ON DELETE CASCADE,
+        UNIQUE(bookId, url)
+      )
+    ''');
+  }
 
   Future<List<Book>> loadBooks() async {
     final db = await database;
@@ -67,7 +94,9 @@ class LibraryDatabase {
     return rows.map(Book.fromMap).toList();
   }
 
-  Future<void> insertBook(Book book, List<ChapterMarker> chapters) async {
+  Future<void> insertBook(Book book,
+      {List<ChapterMarker>? localChapters,
+      List<WebChapter>? webChapters}) async {
     final db = await database;
     await db.transaction((transaction) async {
       final map = book.toMap()
@@ -83,7 +112,12 @@ class LibraryDatabase {
         'progressRatio': book.progressRatio,
         'lastReadAt': book.lastReadAt?.toIso8601String(),
       });
-      await _replaceChapters(transaction, book.id, chapters);
+      if (localChapters != null) {
+        await _replaceChapters(transaction, book.id, localChapters);
+      }
+      if (webChapters != null) {
+        await _replaceWebChapters(transaction, book.id, webChapters);
+      }
     });
   }
 
@@ -131,6 +165,24 @@ class LibraryDatabase {
     ];
   }
 
+  Future<List<WebChapter>> loadWebChapters(String bookId) async {
+    final db = await database;
+    final rows = await db.query(
+      'web_chapters',
+      where: 'bookId = ?',
+      whereArgs: [bookId],
+      orderBy: 'position',
+    );
+    return [
+      for (final row in rows)
+        WebChapter(
+          title: row['title']! as String,
+          url: row['url']! as String,
+          position: row['position']! as int,
+        ),
+    ];
+  }
+
   Future<void> replaceChapters(
     String bookId,
     List<ChapterMarker> chapters,
@@ -138,6 +190,16 @@ class LibraryDatabase {
     final db = await database;
     await db.transaction(
       (transaction) => _replaceChapters(transaction, bookId, chapters),
+    );
+  }
+
+  Future<void> replaceWebChapters(
+    String bookId,
+    List<WebChapter> chapters,
+  ) async {
+    final db = await database;
+    await db.transaction(
+      (transaction) => _replaceWebChapters(transaction, bookId, chapters),
     );
   }
 
@@ -160,6 +222,24 @@ class LibraryDatabase {
         'chapterIndex': index,
         'title': chapter.title,
         'characterOffset': chapter.offset,
+      });
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> _replaceWebChapters(
+    DatabaseExecutor db,
+    String bookId,
+    List<WebChapter> chapters,
+  ) async {
+    await db.delete('web_chapters', where: 'bookId = ?', whereArgs: [bookId]);
+    final batch = db.batch();
+    for (final chapter in chapters) {
+      batch.insert('web_chapters', {
+        'bookId': bookId,
+        'title': chapter.title,
+        'url': chapter.url,
+        'position': chapter.position,
       });
     }
     await batch.commit(noResult: true);

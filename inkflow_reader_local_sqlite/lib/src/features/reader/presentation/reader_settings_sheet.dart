@@ -76,14 +76,91 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
       (chapter) => chapter.offset <= widget.currentOffset,
       orElse: () => chapters.first,
     );
+
+    final isDark = ThemeData.estimateBrightnessForColor(value.backgroundColor) ==
+        Brightness.dark;
+
+    final sheetTheme = Theme.of(context).copyWith(
+      brightness: isDark ? Brightness.dark : Brightness.light,
+      scaffoldBackgroundColor: value.backgroundColor,
+      canvasColor: value.backgroundColor,
+      cardColor: value.backgroundColor,
+      primaryColor: value.textColor,
+      colorScheme: (isDark ? const ColorScheme.dark() : const ColorScheme.light())
+          .copyWith(
+        primary: value.textColor,
+        onPrimary: value.backgroundColor,
+        surface: value.backgroundColor,
+        onSurface: value.textColor,
+      ),
+      textTheme: Theme.of(context).textTheme.apply(
+            bodyColor: value.textColor,
+            displayColor: value.textColor,
+          ),
+      iconTheme: IconThemeData(color: value.textColor.withAlpha((0.85 * 255).round())),
+      sliderTheme: Theme.of(context).sliderTheme.copyWith(
+        activeTrackColor: value.textColor.withAlpha((0.7 * 255).round()),
+        inactiveTrackColor: value.textColor.withAlpha((0.3 * 255).round()),
+        thumbColor: value.textColor,
+        overlayColor: value.textColor.withAlpha((0.2 * 255).round()),
+      ),
+      tabBarTheme: TabBarThemeData(
+        labelColor: value.textColor,
+        unselectedLabelColor:
+            value.textColor.withAlpha((0.75 * 255).round()),
+        indicator: UnderlineTabIndicator(
+          borderSide: BorderSide(
+            color: value.textColor,
+            width: 2,
+          ),
+        ),
+        indicatorColor: value.textColor,
+        dividerColor: value.textColor.withAlpha((0.2 * 255).round()),
+      ),
+      listTileTheme: Theme.of(context).listTileTheme.copyWith(
+            selectedTileColor: value.textColor.withAlpha((0.12 * 255).round()),
+            iconColor: value.textColor.withAlpha((0.85 * 255).round()),
+            textColor: value.textColor,
+            selectedColor: value.textColor,
+          ),
+      dividerTheme: DividerThemeData(
+        color: value.textColor.withAlpha((0.2 * 255).round()),
+        space: 30,
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: value.textColor),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: value.textColor.withAlpha((0.1 * 255).round()),
+          foregroundColor: value.textColor,
+        ),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return value.textColor;
+          return null;
+        }),
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return value.textColor.withAlpha((0.5 * 255).round());
+          }
+          return null;
+        }),
+      ),
+    );
+
     final chapterPanel = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(8, 0, 8, 10),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
           child: Text(
             '章節',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: value.textColor),
           ),
         ),
         Expanded(
@@ -99,7 +176,6 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
                 child: ListTile(
                   dense: true,
                   selected: selected,
-                  selectedTileColor: const Color(0xffeadfd3),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -123,9 +199,12 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '閱讀設定',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+            style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: value.textColor),
           ),
           const SizedBox(height: 12),
           _slider(
@@ -134,6 +213,7 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
             14,
             34,
             (v) => set(value.copyWith(fontSize: v)),
+            value.textColor,
           ),
           _slider(
             '行距',
@@ -141,6 +221,7 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
             1.2,
             2.2,
             (v) => set(value.copyWith(lineHeight: v)),
+            value.textColor,
           ),
           _slider(
             '字距',
@@ -148,6 +229,7 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
             0,
             2,
             (v) => set(value.copyWith(letterSpacing: v)),
+            value.textColor,
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -155,10 +237,10 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
             runSpacing: 10,
             children: [
               for (final theme in const [
-                (Color(0xfff4ecd8), Color(0xff3b332b)),
-                (Color(0xffffffff), Color(0xff202020)),
-                (Color(0xffdce8d5), Color(0xff26352a)),
-                (Color(0xff121212), Color(0xffd6d6d6)),
+                (Color(0xfff4ecd8), Color(0xff3b332b)), // sepia
+                (Color(0xffffffff), Color(0xff202020)), // white
+                (Color(0xffdce8d5), Color(0xff26352a)), // green
+                (Color(0xff121212), Color(0xffd6d6d6)), // dark
               ])
                 InkWell(
                   onTap: () => set(
@@ -176,9 +258,11 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
                       shape: BoxShape.circle,
                       border: Border.all(
                         color: value.backgroundColor == theme.$1
-                            ? const Color(0xff755842)
-                            : Colors.black12,
-                        width: 2,
+                            ? (isDark
+                                ? const Color(0xffd1b399)
+                                : const Color(0xff755842))
+                            : value.textColor.withAlpha((0.2 * 255).round()),
+                        width: 2.5,
                       ),
                     ),
                   ),
@@ -197,7 +281,8 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
                   final path = picked?.files.single.path;
                   if (path == null || !context.mounted) return;
                   try {
-                    final loaded = await FontLoaderService().importAndLoad(path);
+                    final loaded =
+                        await FontLoaderService().importAndLoad(path);
                     await controller.update(
                       value.copyWith(
                         fontFamily: loaded.family,
@@ -249,7 +334,7 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
               );
             },
           ),
-          const Divider(height: 30),
+          const Divider(),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('點擊左右兩側翻頁'),
@@ -260,68 +345,71 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
         ],
       ),
     );
-    return Material(
-      color: const Color(0xfffbf8f1),
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * .72,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            12,
-            16,
-            14 + MediaQuery.paddingOf(context).bottom,
-          ),
-          child: Column(
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.black12,
-                    borderRadius: BorderRadius.circular(4),
+    return Theme(
+      data: sheetTheme,
+      child: Material(
+        color: value.backgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * .72,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              12,
+              16,
+              14 + MediaQuery.paddingOf(context).bottom,
+            ),
+            child: Column(
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: value.textColor.withAlpha((0.2 * 255).round()),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (context, box) {
-                    if (box.maxWidth < 600) {
-                      return DefaultTabController(
-                        length: 2,
-                        child: Column(
-                          children: [
-                            const TabBar(
-                              tabs: [
-                                Tab(text: '章節'),
-                                Tab(text: '閱讀設定'),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Expanded(
-                              child: TabBarView(
-                                children: [chapterPanel, settingsPanel],
+                const SizedBox(height: 14),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, box) {
+                      if (box.maxWidth < 600) {
+                        return DefaultTabController(
+                          length: 2,
+                          child: Column(
+                            children: [
+                              const TabBar(
+                                tabs: [
+                                  Tab(text: '章節'),
+                                  Tab(text: '閱讀設定'),
+                                ],
                               ),
-                            ),
-                          ],
-                        ),
+                              const SizedBox(height: 12),
+                              Expanded(
+                                child: TabBarView(
+                                  children: [chapterPanel, settingsPanel],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(width: 150, child: chapterPanel),
+                          const VerticalDivider(width: 24),
+                          Expanded(child: settingsPanel),
+                        ],
                       );
-                    }
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(width: 150, child: chapterPanel),
-                        const VerticalDivider(width: 24),
-                        Expanded(child: settingsPanel),
-                      ],
-                    );
-                  },
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -334,18 +422,30 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
     double min,
     double max,
     ValueChanged<double> onChanged,
-  ) => Row(
-    children: [
-      SizedBox(width: 74, child: Text(name)),
-      Expanded(
-        child: Slider(
-          value: value.clamp(min, max),
-          min: min,
-          max: max,
-          onChanged: onChanged,
-        ),
-      ),
-      SizedBox(width: 40, child: Text(value.toStringAsFixed(1))),
-    ],
-  );
+    Color textColor,
+  ) =>
+      Row(
+        children: [
+          SizedBox(
+            width: 74,
+            child: Text(name, style: TextStyle(color: textColor)),
+          ),
+          Expanded(
+            child: Slider(
+              value: value.clamp(min, max),
+              min: min,
+              max: max,
+              onChanged: onChanged,
+            ),
+          ),
+          SizedBox(
+            width: 40,
+            child: Text(
+              value.toStringAsFixed(1),
+              style: TextStyle(color: textColor.withAlpha((0.8 * 255).round())),
+            ),
+          ),
+        ],
+      );
 }
+

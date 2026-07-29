@@ -1,87 +1,92 @@
-# 墨讀（Inkflow Reader）
+# Inkflow Reader
 
-墨讀是以 Flutter 製作的本機 TXT 小說閱讀器，主要目標是讓 Android 與 iOS 裝置能順暢匯入大型小說、保存書架與閱讀進度，並提供章節跳轉與自訂 TTF 字體。
+Inkflow Reader 是一個 Flutter TXT 小說閱讀器。它以本機書庫為核心，支援匯入 `.txt`、記錄閱讀進度、解析章節、調整閱讀版面，也支援從小說目錄 URL 匯入網頁章節清單。
 
-## 目前功能
+## 功能
 
-- 匯入本機 `.txt`，選檔器只顯示 TXT
-- 將原始 TXT 複製到 App 私人資料夾，外部檔案權限失效後仍可閱讀
-- SQLite 保存書籍資料、章節文字位置與閱讀進度
-- UTF-8、UTF-16 LE／BE、Big5、GBK 解碼
-- 分批精準分頁：每批最多 6 頁、約 10 毫秒後交還畫面控制權
-- 先恢復到已保存的字元位置，再於背景繼續計算剩餘頁數
-- 點擊畫面中央顯示章節與閱讀設定，章節可直接跳轉
-- 匯入 `.ttf` 字體，選檔器只顯示 TTF
-- 字級、行距、字距、閱讀配色與左右點擊翻頁設定
-- 搜尋、排序、編輯、已讀狀態與刪除書籍
+- 匯入本機 `.txt` 檔案，並複製到 App Support 目錄保存。
+- 自動偵測 UTF-8、UTF-16 LE/BE，非 UTF-8 文字預設嘗試 Big5，也可手動選 Big5、GBK。
+- 使用 SQLite 保存書籍資料、章節、閱讀位置、進度與完讀狀態。
+- 書庫可依最近閱讀、書名或進度排序，並支援書名/作者搜尋。
+- 閱讀器使用分批分頁，避免長文本一次排版造成卡頓。
+- 閱讀設定支援字級、行高、字距、背景/文字主題、TTF 字型匯入與點擊翻頁。
+- 可輸入小說目錄 URL，解析頁面標題、推測章節連結群，並保存網頁章節列表。
 
-`design_canvas.html` 是可直接操作的 UI 預覽。瀏覽器 Canvas 只模擬介面，不會使用 Flutter App 的 SQLite 或私人檔案目錄。
+## URL 匯入目前做到的事
 
-## 儲存架構
+1. 在書庫新增來源時選擇網頁 URL。
+2. 驗證 URL 必須是 `http` 或 `https`。
+3. 下載目錄頁 HTML，解析 `<title>`、`h1`、`h2` 或 `og:title` 作為書名來源。
+4. 收集頁面中的章節候選連結，排除常見導覽/登入/首頁類連結。
+5. 依 DOM 位置與 URL 樣式分群，挑出最像章節列表的一群。
+6. 將書籍與章節連結寫入 SQLite 的 `books` 與 `web_chapters`。
+7. 點開網頁書籍時顯示已匯入的章節列表。
+
+尚未實作：點擊網頁章節後下載章節本文並進入閱讀器。
+
+## 專案結構
 
 ```text
-書架／閱讀畫面
-  ├─ LibraryDatabase
-  │   ├─ books：書籍資訊與本機路徑
-  │   ├─ reading_states：字元位置、進度、目前章節
-  │   └─ chapters：章名與原文文字位置
-  ├─ BookFileStore
-  │   └─ App Support/books/<book-id>.txt
-  └─ PaginationEngine
-      └─ 記憶體中的 PageRange(start, end)
+lib/
+  main.dart
+  src/
+    app.dart
+    core/services/
+      book_file_store.dart        # TXT 檔案保存
+      encoding_service.dart       # TXT 編碼偵測與解碼
+      font_loader_service.dart    # TTF 匯入與載入
+      library_database.dart       # SQLite 書庫
+      web_catalog_resolver.dart   # 網頁目錄連結解析
+    features/
+      library/                    # 書庫、書籍模型、網頁章節列表
+      reader/                     # 閱讀器、設定面板、分頁引擎
+test/                             # 單元與 Widget 測試
+tool/check_canvas_interactions.js # design_canvas.html 互動檢查
 ```
 
-閱讀進度以「原文字元位置」保存，不以頁碼保存。字體、字級、行距、螢幕大小改變而重新分頁時，仍能回到相同內容。
+## 開發環境
 
-分頁邊界目前只保存在記憶體。SQLite 分頁快取尚未加入，避免第一版同時處理快取版本與失效清理；若實機測試顯示重新開書的分頁時間仍過長，再加入持久化頁界。
+- Flutter SDK 3.35 或以上
+- Dart SDK 3.9 或以上
 
-## 主要程式
+安裝依賴：
 
-- `lib/src/core/services/book_file_store.dart`：TXT 複製與刪除
-- `lib/src/core/services/library_database.dart`：SQLite 建表與讀寫
-- `lib/src/core/services/encoding_service.dart`：TXT 編碼偵測與解碼
-- `lib/src/core/services/font_loader_service.dart`：TTF 保存與載入
-- `lib/src/features/reader/domain/pagination_engine.dart`：分批精準分頁
-- `lib/src/features/reader/presentation/reader_view.dart`：背景批次流程、章節跳轉與進度保存
-- `CHANGELOG.md`：每次修改紀錄
+```bash
+flutter pub get
+```
 
-## 建立與執行
+執行檢查：
 
-需要 Flutter 3.35 以上與 Dart 3.9 以上。
+```bash
+flutter analyze
+flutter test
+```
 
-若下載內容尚未包含目標平台資料夾，先在專案根目錄執行：
+啟動 App：
+
+```bash
+flutter run
+```
+
+如需重新產生平台目錄：
 
 ```bash
 flutter create . --platforms=android,ios,web
 ```
 
-再執行：
+## 資料儲存
 
-```bash
-flutter pub get
-flutter analyze
-flutter test
-flutter run
-```
+- SQLite 資料庫：`inkflow_reader.db`
+- 主要資料表：
+  - `books`：書籍基本資料與來源
+  - `reading_states`：目前閱讀位置、章節與進度
+  - `chapters`：本機 TXT 章節標記
+  - `web_chapters`：網頁目錄解析出的章節連結
+- 匯入的 TXT 會存到 App Support 的 `books/<book-id>.txt`。
 
-SQLite 與本機檔案功能以 Android／iOS 為正式目標；`design_canvas.html` 用於桌面瀏覽器快速檢查介面。
+## 目前限制
 
-Canvas 自動檢查：
-
-```bash
-node tool/check_canvas_interactions.js
-```
-
-## 資料安全
-
-- TXT 先串流複製成暫存檔，確認非空後再重新命名。
-- 書籍、初始進度與章節使用同一個 SQLite 交易寫入。
-- 資料庫新增失敗時會清除已複製的 TXT，避免留下孤立檔案。
-- 閱讀進度停止翻頁 800 毫秒後寫入；App 進入背景或離開閱讀器時立即寫入。
-- 刪除書籍會同時刪除 SQLite 紀錄與 App 私人目錄中的 TXT。
-
-## 已知限制
-
-- 網路書籍目前只保存書名、作者與目錄 URL，尚未實作網站內容下載。
-- 分頁使用 Flutter `TextPainter`，必須在 UI isolate 執行，因此以短批次主動讓出控制權。
-- 尚未加入雲端同步、登入、分頁邊界持久化與重複書籍偵測。
+- 網頁章節目前只匯入目錄與連結，尚未下載本文。
+- 網頁目錄解析是啟發式規則，遇到特殊網站版型可能需要調整 `WebCatalogResolver`。
+- UI 文字有部分編碼損毀，README 已先整理為可讀版本。
+- `design_canvas.html` 是靜態設計/互動原型，不直接使用 Flutter App 的 SQLite 與服務層。

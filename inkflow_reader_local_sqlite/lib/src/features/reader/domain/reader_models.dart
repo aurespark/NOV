@@ -14,6 +14,18 @@ class ChapterMarker {
   final int offset;
 }
 
+class WebChapter {
+  const WebChapter({
+    required this.url,
+    required this.title,
+    required this.position,
+  });
+
+  final String url;
+  final String title;
+  final int position;
+}
+
 class ChapterParser {
   static final _heading = RegExp(
     r'^[ \t]*(第[0-9０-９一二三四五六七八九十百千零〇兩两]+[章回卷節部篇][^\r\n]*|(?:chapter|section)[ \t]+[0-9０-９]+[^\r\n]*|序章|楔子|前言|後記)[ \t]*\r?$',

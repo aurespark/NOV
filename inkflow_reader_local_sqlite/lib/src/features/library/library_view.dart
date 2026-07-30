@@ -176,7 +176,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   }
 
   Future<void> _addWeb() async {
-    final controller = TextEditingController();
+    var typedUrl = '';
     final submitted = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -185,13 +185,13 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: controller,
               autofocus: true,
               keyboardType: TextInputType.url,
               decoration: const InputDecoration(
                 labelText: '小說目錄網址',
                 hintText: 'https://example.com/catalog',
               ),
+              onChanged: (value) => typedUrl = value,
               onSubmitted: (value) => Navigator.pop(context, value),
             ),
             const SizedBox(height: 12),
@@ -204,13 +204,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
+            onPressed: () => Navigator.pop(context, typedUrl),
             child: const Text('分析目錄'),
           ),
         ],
       ),
     );
-    controller.dispose();
     if (!mounted || submitted == null) return;
 
     const urlPolicy = WebUrlPolicy();
@@ -252,6 +251,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         sourceHost: resolution.url.host,
         chapterCount: links.length,
         warnings: resolution.warnings,
+        diagnostics: resolution.diagnostics,
       );
       if (!mounted || !confirmed) return;
 
@@ -311,6 +311,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     required String sourceHost,
     required int chapterCount,
     required List<String> warnings,
+    required WebCatalogDiagnostics diagnostics,
   }) async {
     final result = await showDialog<bool>(
       context: context,
@@ -324,6 +325,20 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
             const SizedBox(height: 12),
             Text('來源：$sourceHost'),
             Text('章節：$chapterCount 章'),
+            Text('已檢查目錄頁：${diagnostics.visitedPages} 頁'),
+            Text(
+              diagnostics.completeness == WebCatalogCompleteness.complete
+                  ? '完整性：高信心完整'
+                  : diagnostics.completeness == WebCatalogCompleteness.warning
+                  ? '完整性：可能不完整'
+                  : '完整性：需要動態解析',
+              style: TextStyle(
+                color:
+                    diagnostics.completeness == WebCatalogCompleteness.complete
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.error,
+              ),
+            ),
             if (warnings.isNotEmpty) ...[
               const SizedBox(height: 12),
               for (final warning in warnings)
@@ -377,13 +392,6 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     } else if (action == 'update') {
       _message('目錄更新將於 M5 啟用，目前未新增副本。');
     }
-  }
-
-
-  String _normalizeWebTitle(String value) {
-    final cleaned = value.trim();
-    if (cleaned.isEmpty) return '未命名網路書籍';
-    return cleaned.length > 80 ? cleaned.substring(0, 80) : cleaned;
   }
 
   Future<void> _open(Book book, {String? initialText}) async {

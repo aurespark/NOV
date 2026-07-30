@@ -215,7 +215,7 @@ class WebCatalogResolver {
     final meta = _charsetFromMeta(bytes);
     final declared = _canonicalCharset(header ?? meta);
     if (declared == 'big5' || declared == 'gbk') {
-      return _legacyDecoder(declared, bytes);
+      return _legacyDecoder(declared!, bytes);
     }
     if (declared == 'utf-8') return utf8.decode(bytes, allowMalformed: true);
     try {

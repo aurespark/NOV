@@ -14,17 +14,6 @@ class ChapterMarker {
   final int offset;
 }
 
-class WebChapter {
-  const WebChapter({
-    required this.url,
-    required this.title,
-    required this.position,
-  });
-
-  final String url;
-  final String title;
-  final int position;
-}
 
 class ChapterParser {
   static final _heading = RegExp(

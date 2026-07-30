@@ -8,6 +8,7 @@ import '../../core/services/encoding_service.dart';
 import '../../core/services/library_database.dart';
 import '../../core/services/web_catalog_resolver.dart';
 import '../../core/services/web_url_policy.dart';
+import 'web_catalog_import_dialog.dart';
 import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
 import '../reader/presentation/reader_view.dart';
@@ -176,40 +177,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   }
 
   Future<void> _addWeb() async {
-    var typedUrl = '';
-    final submitted = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('匯入線上小說'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              autofocus: true,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(
-                labelText: '小說目錄網址',
-                hintText: 'https://example.com/catalog',
-              ),
-              onChanged: (value) => typedUrl = value,
-              onSubmitted: (value) => Navigator.pop(context, value),
-            ),
-            const SizedBox(height: 12),
-            const Text('僅匯入你有權存取的公開或已授權內容；不會繞過登入、驗證或付費限制。'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, typedUrl),
-            child: const Text('分析目錄'),
-          ),
-        ],
-      ),
-    );
+    final submitted = await showWebCatalogUrlDialog(context);
     if (!mounted || submitted == null) return;
 
     const urlPolicy = WebUrlPolicy();
@@ -243,6 +211,11 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       ).resolve(uri);
       final links = resolution.bestCluster?.links ?? const <WebCatalogLink>[];
       if (links.isEmpty) {
+        if (resolution.diagnostics.completeness ==
+            WebCatalogCompleteness.fallbackRequired) {
+          await _showCatalogFallback(resolution);
+          return;
+        }
         throw const WebCatalogException('找不到可信的章節目錄，未建立書籍');
       }
       final title = _normalizeWebTitle(resolution.pageTitle ?? uri.host);
@@ -313,6 +286,13 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     required List<String> warnings,
     required WebCatalogDiagnostics diagnostics,
   }) async {
+    final isComplete =
+        diagnostics.completeness == WebCatalogCompleteness.complete;
+    final completenessLabel = switch (diagnostics.completeness) {
+      WebCatalogCompleteness.complete => '完整性：高信心完整',
+      WebCatalogCompleteness.warning => '完整性：可能不完整',
+      WebCatalogCompleteness.fallbackRequired => '完整性：需要動態解析',
+    };
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -327,14 +307,9 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
             Text('章節：$chapterCount 章'),
             Text('已檢查目錄頁：${diagnostics.visitedPages} 頁'),
             Text(
-              diagnostics.completeness == WebCatalogCompleteness.complete
-                  ? '完整性：高信心完整'
-                  : diagnostics.completeness == WebCatalogCompleteness.warning
-                  ? '完整性：可能不完整'
-                  : '完整性：需要動態解析',
+              completenessLabel,
               style: TextStyle(
-                color:
-                    diagnostics.completeness == WebCatalogCompleteness.complete
+                color: isComplete
                     ? Theme.of(context).colorScheme.primary
                     : Theme.of(context).colorScheme.error,
               ),
@@ -362,6 +337,25 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       ),
     );
     return result ?? false;
+  }
+
+  Future<void> _showCatalogFallback(WebCatalogResolution resolution) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('需要動態解析'),
+        content: Text(
+          '已檢查 ${resolution.diagnostics.visitedPages} 頁，但靜態網頁沒有提供完整目錄。'
+          '此網站需要 M7 的安全 WebView 備援，目前不會建立不完整書籍。',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showExistingWebBook(Book book) async {

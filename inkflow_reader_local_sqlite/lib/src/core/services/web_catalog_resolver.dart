@@ -5,6 +5,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 
 import '../../features/reader/domain/reader_models.dart';
+import 'web_url_policy.dart';
 
 class WebCatalogLink {
   const WebCatalogLink({
@@ -64,6 +65,11 @@ class WebCatalogResolution {
 }
 
 class WebCatalogResolver {
+  WebCatalogResolver({WebUrlPolicy? urlPolicy})
+    : _urlPolicy = urlPolicy ?? const WebUrlPolicy();
+
+  final WebUrlPolicy _urlPolicy;
+
   static final _chapterPattern = RegExp(
     r'^(第[0-9０-９一二三四五六七八九十百千零〇兩两]+[章回卷節部篇].*|(?:chapter|section)\s+[0-9０-９]+.*|序章|楔子|前言|後記)$',
     caseSensitive: false,
@@ -90,12 +96,42 @@ class WebCatalogResolver {
   static const _titleWeights = (0.55, 0.25, 0.20);
 
   Future<WebCatalogResolution> resolve(Uri url) async {
-    final response = await http.get(url);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw StateError('無法抓取網頁：HTTP ${response.statusCode}');
+    var current = _urlPolicy.normalize(url);
+    final client = http.Client();
+    try {
+      for (var redirectCount = 0; ; redirectCount++) {
+        _urlPolicy.validate(current, redirectCount: redirectCount);
+        final request = http.Request('GET', current)..followRedirects = false;
+        final streamed = await client.send(request);
+        final response = await http.Response.fromStream(streamed);
+        if (_isRedirect(response.statusCode)) {
+          final location = response.headers['location'];
+          if (location == null || location.trim().isEmpty) {
+            throw StateError('重新導向缺少 Location');
+          }
+          current = _urlPolicy.parseAndNormalize(location, baseUrl: current);
+          continue;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw StateError('無法抓取網頁：HTTP ${response.statusCode}');
+        }
+        return resolveHtml(
+          current,
+          response.bodyBytes,
+          response.headers['content-type'],
+        );
+      }
+    } finally {
+      client.close();
     }
-    return resolveHtml(url, response.bodyBytes, response.headers['content-type']);
   }
+
+  bool _isRedirect(int statusCode) =>
+      statusCode == 301 ||
+      statusCode == 302 ||
+      statusCode == 303 ||
+      statusCode == 307 ||
+      statusCode == 308;
 
   WebCatalogResolution resolveHtml(
     Uri url,
@@ -255,10 +291,11 @@ class WebCatalogResolver {
   }
 
   Uri? _resolveHref(Uri baseUrl, String href) {
-    final parsed = Uri.tryParse(href);
-    if (parsed == null) return null;
-    if (parsed.hasScheme) return parsed;
-    return baseUrl.resolveUri(parsed);
+    try {
+      return _urlPolicy.parseAndNormalize(href, baseUrl: baseUrl);
+    } on FormatException {
+      return null;
+    }
   }
 
   String _domPath(Element element) {

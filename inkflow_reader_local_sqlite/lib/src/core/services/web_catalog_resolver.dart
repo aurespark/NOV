@@ -57,6 +57,38 @@ class WebCatalogCluster {
   final String selector;
 }
 
+enum WebCatalogCompleteness { complete, warning, fallbackRequired }
+
+enum WebCatalogStopReason {
+  exhausted,
+  pageLimit,
+  candidateLimit,
+  noCatalog,
+  staticHtmlInsufficient,
+}
+
+class WebCatalogDiagnostics {
+  const WebCatalogDiagnostics({
+    required this.completeness,
+    required this.stopReason,
+    required this.discoveredPages,
+    required this.visitedPages,
+    required this.chapterGroups,
+    required this.chapterCount,
+    required this.numberGaps,
+    required this.hasUnvisitedNavigation,
+  });
+
+  final WebCatalogCompleteness completeness;
+  final WebCatalogStopReason stopReason;
+  final int discoveredPages;
+  final int visitedPages;
+  final int chapterGroups;
+  final int chapterCount;
+  final List<int> numberGaps;
+  final bool hasUnvisitedNavigation;
+}
+
 class WebCatalogResolution {
   const WebCatalogResolution({
     required this.url,
@@ -66,6 +98,7 @@ class WebCatalogResolution {
     required this.bestCluster,
     required this.visitedPages,
     required this.warnings,
+    required this.diagnostics,
   });
 
   final Uri url;
@@ -75,6 +108,7 @@ class WebCatalogResolution {
   final WebCatalogCluster? bestCluster;
   final List<Uri> visitedPages;
   final List<String> warnings;
+  final WebCatalogDiagnostics diagnostics;
 
   String? get bestSelector => bestCluster?.selector;
   List<ChapterMarker> get chapterHints => [
@@ -96,6 +130,8 @@ class WebCatalogResolver {
     WebCatalogPageLoader? pageLoader,
     LegacyCharsetDecoder? legacyDecoder,
     this.maxCatalogPages = 50,
+    this.maxCandidates = 100,
+    this.maxDiscoveryDepth = 2,
   }) : _urlPolicy = urlPolicy ?? const WebUrlPolicy(),
        _pageLoader = pageLoader,
        _legacyDecoder =
@@ -106,6 +142,8 @@ class WebCatalogResolver {
   final WebCatalogPageLoader? _pageLoader;
   final LegacyCharsetDecoder _legacyDecoder;
   final int maxCatalogPages;
+  final int maxCandidates;
+  final int maxDiscoveryDepth;
 
   static final _chapterPattern = RegExp(
     r'^(第[0-9０-９一二三四五六七八九十百千零〇兩两]+[章回卷節部篇].*|(?:chapter|section)\s+[0-9０-９]+.*|序章.*|楔子.*|前言.*|後記.*|番外.*)$',
@@ -120,7 +158,19 @@ class WebCatalogResolver {
     caseSensitive: false,
   );
   static final _nextCatalogPattern = RegExp(
-    r'^(下一頁|下頁|更多章節|下一批|next)\s*[»›>]?$',
+    r'^(下一頁|下頁|更多章節|下一批|末頁|next)\s*[»›>]?$',
+    caseSensitive: false,
+  );
+  static final _catalogEntryPattern = RegExp(
+    r'(章節列表|章節目錄|全部章節|完整目錄|查看全部|目錄|開始閱讀|繼續閱讀)',
+    caseSensitive: false,
+  );
+  static final _pageNumberPattern = RegExp(r'^[第]?\s*[0-9０-９]{1,4}\s*[頁]?$');
+  static final _volumePattern = RegExp(
+    r'^(正文|第?[0-9０-９一二三四五六七八九十百千零〇兩两]+卷|卷[一二三四五六七八九十0-9０-９]+).*$',
+  );
+  static final _looseChapterPattern = RegExp(
+    r'^(?:[0-9０-９]{1,6}[\s._、：:-]+.+|正文[一二三四五六七八九十0-9０-９]+.*|序言.*|序幕.*|引子.*|尾聲.*|終章.*|大結局.*)$',
     caseSensitive: false,
   );
   static const _blacklist = <String>{
@@ -144,23 +194,53 @@ class WebCatalogResolver {
     final start = _urlPolicy.normalize(url);
     final visited = <Uri>{};
     final pages = <WebCatalogResolution>[];
-    Uri? current = start;
+    final discovered = <Uri>{start};
+    final queue = <({Uri url, int depth})>[(url: start, depth: 0)];
+    var hitPageLimit = false;
+    var hitCandidateLimit = false;
 
-    while (current != null && visited.length < maxCatalogPages) {
-      final normalized = _urlPolicy.normalize(current);
-      if (!visited.add(normalized)) break;
+    while (queue.isNotEmpty) {
+      if (visited.length >= maxCatalogPages) {
+        hitPageLimit = true;
+        break;
+      }
+      final item = queue.removeAt(0);
+      final normalized = _urlPolicy.normalize(item.url);
+      if (!visited.add(normalized)) continue;
       final page = await (_pageLoader?.call(normalized) ?? _loadHttp(normalized));
       final decoded = await decodeHtml(page.bytes, page.contentType);
       final document = html_parser.parse(decoded);
       final resolution = resolveDocument(page.url, document);
       pages.add(resolution);
-      current = _nextCatalogUrl(page.url, document, visited);
-    }
-    if (current != null && visited.length >= maxCatalogPages) {
-      throw WebCatalogException('目錄頁數超過 $maxCatalogPages 頁安全上限');
+
+      final nextDepth = resolution.bestCluster == null
+          ? item.depth + 1
+          : item.depth;
+      for (final candidate in _navigationUrls(
+        start: start,
+        base: page.url,
+        document: document,
+        allowCatalogDiscovery: item.depth < maxDiscoveryDepth,
+      )) {
+        if (discovered.length >= maxCandidates) {
+          hitCandidateLimit = true;
+          break;
+        }
+        if (nextDepth <= maxDiscoveryDepth && discovered.add(candidate)) {
+          queue.add((url: candidate, depth: nextDepth));
+        }
+      }
     }
     if (pages.isEmpty) throw const WebCatalogException('找不到可解析的目錄頁');
-    return _mergePages(start, pages, visited.toList(growable: false));
+    return _mergePages(
+      start,
+      pages,
+      visited.toList(growable: false),
+      discoveredPages: discovered.length,
+      hasUnvisitedNavigation: queue.isNotEmpty,
+      hitPageLimit: hitPageLimit,
+      hitCandidateLimit: hitCandidateLimit,
+    );
   }
 
   Future<WebCatalogPage> _loadHttp(Uri initialUrl) async {
@@ -244,39 +324,83 @@ class WebCatalogResolver {
 
     final links = _deduplicate(_collectLinks(url, document));
     final clusters = _clusterLinks(links);
-    final best = clusters.where(_isValidCluster).firstOrNull;
+    final valid = clusters.where(_isValidCluster).toList(growable: false);
+    final selected = _deduplicate([
+      for (final cluster in valid) ...cluster.links,
+    ]);
+    final best = selected.isEmpty ? null : _buildCluster('merged', selected);
     return WebCatalogResolution(
       url: url,
       pageTitle: _extractPageTitle(document),
       links: List.unmodifiable(links),
-      clusters: List.unmodifiable(clusters),
+      clusters: List.unmodifiable(valid),
       bestCluster: best,
       visitedPages: const [],
       warnings: best == null ? const ['未找到可信的章節目錄'] : const [],
+      diagnostics: WebCatalogDiagnostics(
+        completeness: best == null
+            ? WebCatalogCompleteness.fallbackRequired
+            : WebCatalogCompleteness.complete,
+        stopReason: best == null
+            ? WebCatalogStopReason.noCatalog
+            : WebCatalogStopReason.exhausted,
+        discoveredPages: 1,
+        visitedPages: 1,
+        chapterGroups: valid.length,
+        chapterCount: selected.length,
+        numberGaps: _chapterNumberGaps(selected),
+        hasUnvisitedNavigation: false,
+      ),
     );
   }
 
   bool _isValidCluster(WebCatalogCluster cluster) =>
       cluster.links.length >= 3 &&
-      cluster.titleScore >= 0.5 &&
-      cluster.score >= 0.45;
+      cluster.titleScore >= 0.20 &&
+      cluster.score >= 0.32;
 
   WebCatalogResolution _mergePages(
     Uri start,
     List<WebCatalogResolution> pages,
-    List<Uri> visited,
+    List<Uri> visited, {
+    required int discoveredPages,
+    required bool hasUnvisitedNavigation,
+    required bool hitPageLimit,
+    required bool hitCandidateLimit,
+  }
   ) {
     final selected = <WebCatalogLink>[];
     final seen = <Uri>{};
     final warnings = <String>[];
     for (final page in pages) {
       warnings.addAll(page.warnings);
-      for (final link in page.bestCluster?.links ?? const <WebCatalogLink>[]) {
-        if (seen.add(_urlPolicy.normalize(link.href))) selected.add(link);
+      for (final cluster in page.clusters) {
+        for (final link in cluster.links) {
+          if (seen.add(_urlPolicy.normalize(link.href))) selected.add(link);
+        }
       }
     }
-    final ordered = _correctOverallReverse(selected);
+    final ordered = _normalizeChapterOrder(_correctOverallReverse(selected));
     final mergedCluster = ordered.isEmpty ? null : _buildCluster('merged', ordered);
+    final gaps = _chapterNumberGaps(ordered);
+    final groupCount = pages.fold<int>(0, (sum, page) => sum + page.clusters.length);
+    final staticInsufficient = ordered.isEmpty;
+    final incomplete = hitPageLimit ||
+        hitCandidateLimit ||
+        hasUnvisitedNavigation ||
+        gaps.length > 3;
+    final stopReason = hitPageLimit
+        ? WebCatalogStopReason.pageLimit
+        : hitCandidateLimit
+        ? WebCatalogStopReason.candidateLimit
+        : staticInsufficient
+        ? WebCatalogStopReason.staticHtmlInsufficient
+        : WebCatalogStopReason.exhausted;
+    if (hitPageLimit) warnings.add('已達 $maxCatalogPages 頁安全上限，目錄可能不完整');
+    if (hitCandidateLimit) warnings.add('目錄候選超過 $maxCandidates 個，已停止探索');
+    if (gaps.length > 3) warnings.add('章號存在多個缺口，請確認目錄是否完整');
+    if (staticInsufficient) warnings.add('靜態 HTML 未提供足夠章節，需使用動態解析');
+    if (!staticInsufficient) warnings.remove('未找到可信的章節目錄');
     return WebCatalogResolution(
       url: pages.first.url,
       pageTitle: pages.first.pageTitle,
@@ -285,15 +409,44 @@ class WebCatalogResolver {
       bestCluster: mergedCluster,
       visitedPages: List.unmodifiable(visited),
       warnings: List.unmodifiable(warnings.toSet()),
+      diagnostics: WebCatalogDiagnostics(
+        completeness: staticInsufficient
+            ? WebCatalogCompleteness.fallbackRequired
+            : incomplete
+            ? WebCatalogCompleteness.warning
+            : WebCatalogCompleteness.complete,
+        stopReason: stopReason,
+        discoveredPages: discoveredPages,
+        visitedPages: visited.length,
+        chapterGroups: groupCount,
+        chapterCount: ordered.length,
+        numberGaps: List.unmodifiable(gaps),
+        hasUnvisitedNavigation: hasUnvisitedNavigation,
+      ),
     );
   }
 
-  Uri? _nextCatalogUrl(Uri base, Document document, Set<Uri> visited) {
+  List<Uri> _navigationUrls({
+    required Uri start,
+    required Uri base,
+    required Document document,
+    required bool allowCatalogDiscovery,
+  }) {
+    final result = <Uri>[];
+    final seen = <Uri>{};
     for (final anchor in document.querySelectorAll('a[href]')) {
       final rel = anchor.attributes['rel']?.toLowerCase().split(RegExp(r'\s+'));
       final text = anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (!(rel?.contains('next') ?? false) &&
-          !_nextCatalogPattern.hasMatch(text)) {
+      final parentText = anchor.parent?.text.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
+      final isPager = (rel?.contains('next') ?? false) ||
+          _nextCatalogPattern.hasMatch(text) ||
+          (_pageNumberPattern.hasMatch(text) && _looksLikePager(anchor.parent)) ||
+          _looksLikePaginationHref(anchor.attributes['href'] ?? '');
+      final isCatalogEntry =
+          allowCatalogDiscovery && _catalogEntryPattern.hasMatch('$text $parentText');
+      final isVolumeEntry =
+          _volumePattern.hasMatch(text) && _looksLikeRepeatedNavigation(anchor.parent);
+      if (!isPager && !isCatalogEntry && !isVolumeEntry) {
         continue;
       }
       try {
@@ -301,12 +454,16 @@ class WebCatalogResolver {
           anchor.attributes['href']!,
           baseUrl: base,
         );
-        if (!visited.contains(candidate)) return candidate;
+        if (_sameOrigin(start, candidate) &&
+            _withinBookScope(start, candidate, isCatalogEntry: isCatalogEntry) &&
+            seen.add(candidate)) {
+          result.add(candidate);
+        }
       } on FormatException {
         continue;
       }
     }
-    return null;
+    return result;
   }
 
   List<WebCatalogLink> _collectLinks(Uri base, Document document) {
@@ -316,7 +473,13 @@ class WebCatalogResolver {
       if (text.isEmpty || text.length > 100 || _blacklist.contains(text)) {
         continue;
       }
-      if (!_chapterPattern.hasMatch(text)) continue;
+      final semanticChapter =
+          _chapterPattern.hasMatch(text) || _looseChapterPattern.hasMatch(text);
+      final structuralChapter =
+          _looksLikeRepeatedNavigation(element.parent) &&
+          !_catalogEntryPattern.hasMatch(text) &&
+          !_pageNumberPattern.hasMatch(text);
+      if (!semanticChapter && !structuralChapter) continue;
       try {
         final href = _urlPolicy.parseAndNormalize(
           element.attributes['href']!,
@@ -357,7 +520,9 @@ class WebCatalogResolver {
 
   WebCatalogCluster _buildCluster(String key, List<WebCatalogLink> links) {
     final titleScore =
-        links.where((link) => _chapterPattern.hasMatch(link.text)).length /
+        links.where((link) =>
+          _chapterPattern.hasMatch(link.text) ||
+          _looseChapterPattern.hasMatch(link.text)).length /
         links.length;
     final countScore = (links.length / 12).clamp(0, 1).toDouble();
     final mean =
@@ -401,9 +566,25 @@ class WebCatalogResolver {
     return links.reversed.toList(growable: false);
   }
 
+  List<WebCatalogLink> _normalizeChapterOrder(List<WebCatalogLink> links) {
+    if (links.length < 5) return links;
+    final numbered = links
+        .map((link) => (link: link, number: chapterNumber(link.text)))
+        .toList(growable: false);
+    final recognized = numbered.where((item) => item.number != null).length;
+    if (recognized / links.length < 0.70) return links;
+    final result = [...numbered]..sort((a, b) {
+      if (a.number == null && b.number == null) return 0;
+      if (a.number == null) return 1;
+      if (b.number == null) return -1;
+      return a.number!.compareTo(b.number!);
+    });
+    return result.map((item) => item.link).toList(growable: false);
+  }
+
   static int? chapterNumber(String title) {
     final match = RegExp(
-      r'(?:第|chapter\s*|section\s*)([0-9０-９一二三四五六七八九十百千零〇兩两]+)',
+      r'(?:第|chapter\s*|section\s*)?([0-9０-９一二三四五六七八九十百千零〇兩两]+)(?=\s*[章回卷節部篇._、：:\-\s]|$)',
       caseSensitive: false,
     ).firstMatch(title);
     if (match == null) return null;
@@ -544,6 +725,63 @@ class WebCatalogResolver {
     if (value.isEmpty || value.contains('\ufffd')) return true;
     final controls = value.runes.where((rune) => rune < 32 && rune != 10).length;
     return controls > value.length ~/ 50;
+  }
+
+  bool _sameOrigin(Uri a, Uri b) =>
+      a.scheme == b.scheme && a.host == b.host && a.port == b.port;
+
+  bool _withinBookScope(Uri start, Uri candidate, {required bool isCatalogEntry}) {
+    if (isCatalogEntry) return true;
+    final startSegments = start.pathSegments.where((item) => item.isNotEmpty).toList();
+    final candidateSegments =
+        candidate.pathSegments.where((item) => item.isNotEmpty).toList();
+    if (startSegments.isEmpty || candidateSegments.isEmpty) return true;
+    return startSegments.first == candidateSegments.first ||
+        startSegments.any(candidateSegments.contains);
+  }
+
+  bool _looksLikePager(Element? parent) {
+    if (parent == null) return false;
+    final label = '${parent.id} ${parent.className}'.toLowerCase();
+    final numericLinks = parent
+        .querySelectorAll('a[href]')
+        .where((item) => _pageNumberPattern.hasMatch(item.text.trim()))
+        .length;
+    return numericLinks >= 2 ||
+        RegExp(r'(page|pager|pagination|分頁|頁碼)').hasMatch(label);
+  }
+
+  bool _looksLikeRepeatedNavigation(Element? parent) {
+    if (parent == null) return false;
+    final anchors = parent.querySelectorAll('a[href]');
+    if (anchors.length >= 3) return true;
+    final grandParent = parent.parent;
+    return grandParent != null && grandParent.querySelectorAll('a[href]').length >= 3;
+  }
+
+  bool _looksLikePaginationHref(String href) => RegExp(
+    r'([?&](?:page|p)=\d+|(?:index|list|catalog)[_-]?\d+\.(?:html?|shtml)$)',
+    caseSensitive: false,
+  ).hasMatch(href);
+
+  static List<int> _chapterNumberGaps(List<WebCatalogLink> links) {
+    final numbers = links
+        .map((link) => chapterNumber(link.text))
+        .whereType<int>()
+        .toSet()
+        .toList()
+      ..sort();
+    if (numbers.length < 3) return const [];
+    final result = <int>[];
+    for (var i = 1; i < numbers.length; i++) {
+      final distance = numbers[i] - numbers[i - 1];
+      if (distance > 1 && distance <= 20) {
+        result.addAll([
+          for (var value = numbers[i - 1] + 1; value < numbers[i]; value++) value,
+        ]);
+      }
+    }
+    return result;
   }
 }
 

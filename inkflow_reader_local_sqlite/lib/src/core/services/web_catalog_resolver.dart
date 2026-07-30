@@ -30,11 +30,13 @@ class WebCatalogLink {
     required this.text,
     required this.href,
     required this.domPath,
+    this.containerLinkCount = 1,
   });
 
   final String text;
   final Uri href;
   final String domPath;
+  final int containerLinkCount;
 }
 
 class WebCatalogCluster {
@@ -44,6 +46,7 @@ class WebCatalogCluster {
     required this.titleScore,
     required this.countScore,
     required this.varianceScore,
+    required this.densityScore,
     required this.score,
     required this.selector,
   });
@@ -53,6 +56,7 @@ class WebCatalogCluster {
   final double titleScore;
   final double countScore;
   final double varianceScore;
+  final double densityScore;
   final double score;
   final String selector;
 }
@@ -389,7 +393,9 @@ class WebCatalogResolver {
   bool _isValidCluster(WebCatalogCluster cluster) =>
       cluster.links.length >= 3 &&
       (cluster.titleScore >= 0.20 ||
-          (cluster.links.length >= 5 && cluster.countScore >= 0.40)) &&
+          (cluster.links.length >= 5 &&
+              cluster.countScore >= 0.40 &&
+              cluster.densityScore >= 0.60)) &&
       cluster.score >= 0.25;
 
   List<WebCatalogCluster> _removeSubsetClusters(
@@ -452,12 +458,13 @@ class WebCatalogResolver {
     final mergedCluster = ordered.isEmpty ? null : _buildCluster('merged', ordered);
     final gaps = _chapterNumberGaps(ordered);
     final groupCount = pages.fold<int>(0, (sum, page) => sum + page.clusters.length);
-    final staticInsufficient = ordered.isEmpty || gaps.length > 3;
+    final staticInsufficient =
+        ordered.isEmpty || gaps.length > 3 || hadParseFailure;
     final incomplete = hitPageLimit ||
         hitCandidateLimit ||
         hadParseFailure ||
         hasUnvisitedNavigation ||
-        gaps.length > 3;
+        gaps.isNotEmpty;
     final stopReason = hitPageLimit
         ? WebCatalogStopReason.pageLimit
         : hitCandidateLimit
@@ -469,7 +476,11 @@ class WebCatalogResolver {
         : WebCatalogStopReason.exhausted;
     if (hitPageLimit) warnings.add('已達 $maxCatalogPages 頁安全上限，目錄可能不完整');
     if (hitCandidateLimit) warnings.add('目錄候選超過 $maxCandidates 個，已停止探索');
+    if (gaps.isNotEmpty && gaps.length <= 3) {
+      warnings.add('章號有缺口（${gaps.join('、')}），匯入前請確認');
+    }
     if (gaps.length > 3) warnings.add('章號存在多個缺口，需使用動態解析確認');
+    if (hadParseFailure) warnings.add('部分目錄頁抓取失敗，需使用動態解析確認');
     if (staticInsufficient) warnings.add('靜態 HTML 未提供足夠章節，需使用動態解析');
     if (!staticInsufficient) warnings.remove('未找到可信的章節目錄');
     return WebCatalogResolution(
@@ -563,7 +574,14 @@ class WebCatalogResolver {
           baseUrl: base,
         );
         result.add(
-          WebCatalogLink(text: text, href: href, domPath: _domPath(element)),
+          WebCatalogLink(
+            text: text,
+            href: href,
+            domPath: _domPath(element),
+            containerLinkCount: _candidateContainer(element)
+                .querySelectorAll('a[href]')
+                .length,
+          ),
         );
       } on FormatException {
         continue;
@@ -622,14 +640,23 @@ class WebCatalogResolver {
             .reduce((a, b) => a + b) /
         links.length;
     final varianceScore = 1 / (1 + MathHelper.sqrt(variance) / mean);
+    final maxContainerLinks = links
+        .map((link) => link.containerLinkCount)
+        .fold<int>(1, (current, value) => value > current ? value : current);
+    final densityScore =
+        (links.length / maxContainerLinks).clamp(0, 1).toDouble();
     final score =
-        0.55 * titleScore + 0.25 * countScore + 0.20 * varianceScore;
+        0.45 * titleScore +
+        0.20 * countScore +
+        0.15 * varianceScore +
+        0.20 * densityScore;
     return WebCatalogCluster(
       key: key,
       links: List.unmodifiable(links),
       titleScore: titleScore,
       countScore: countScore,
       varianceScore: varianceScore,
+      densityScore: densityScore,
       score: score,
       selector: key == 'merged' ? 'a' : '${key.split('|').first} a',
     );
@@ -734,6 +761,15 @@ class WebCatalogResolver {
     return parts.reversed.join(' > ');
   }
 
+  Element _candidateContainer(Element element) {
+    var current = element.parent ?? element;
+    while (current.parent != null &&
+        current.querySelectorAll('a[href]').length < 3) {
+      current = current.parent!;
+    }
+    return current;
+  }
+
   String? _extractPageTitle(Document document) {
     for (final selector in [
       'meta[property="og:title"]',
@@ -826,15 +862,31 @@ class WebCatalogResolver {
       'index',
       '目錄',
     };
-    return uri.pathSegments
+    final queryTokens = <String>{
+      for (final entry in uri.queryParameters.entries)
+        if (const {'id', 'book', 'bookid', 'novel', 'novelid'}
+            .contains(entry.key.toLowerCase()))
+          '${entry.key.toLowerCase()}=${entry.value.toLowerCase()}',
+    };
+    if (queryTokens.isNotEmpty) return queryTokens;
+    final segments = uri.pathSegments
         .map((segment) => segment
             .toLowerCase()
             .replaceAll(RegExp(r'\.(?:html?|shtml)$'), '')
             .trim())
+        .toList();
+    for (var i = 0; i < segments.length - 1; i++) {
+      if (const {'book', 'books', 'novel', 'novels'}.contains(segments[i]) &&
+          segments[i + 1].isNotEmpty) {
+        return {segments[i + 1]};
+      }
+    }
+    return segments
         .where((segment) =>
             segment.isNotEmpty &&
             !generic.contains(segment) &&
             !_looksLikePageToken(segment))
+        .take(1)
         .toSet();
   }
 

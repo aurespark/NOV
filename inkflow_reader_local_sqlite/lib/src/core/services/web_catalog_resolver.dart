@@ -65,6 +65,7 @@ enum WebCatalogStopReason {
   candidateLimit,
   noCatalog,
   staticHtmlInsufficient,
+  parseFailure,
 }
 
 class WebCatalogDiagnostics {
@@ -132,6 +133,7 @@ class WebCatalogResolver {
     this.maxCatalogPages = 50,
     this.maxCandidates = 100,
     this.maxDiscoveryDepth = 2,
+    this.requestTimeout = const Duration(seconds: 20),
   }) : _urlPolicy = urlPolicy ?? const WebUrlPolicy(),
        _pageLoader = pageLoader,
        _legacyDecoder =
@@ -144,6 +146,7 @@ class WebCatalogResolver {
   final int maxCatalogPages;
   final int maxCandidates;
   final int maxDiscoveryDepth;
+  final Duration requestTimeout;
 
   static final _chapterPattern = RegExp(
     r'^(第[0-9０-９一二三四五六七八九十百千零〇兩两]+[章回卷節部篇].*|(?:chapter|section)\s+[0-9０-９]+.*|序章.*|楔子.*|前言.*|後記.*|番外.*)$',
@@ -198,6 +201,8 @@ class WebCatalogResolver {
     final queue = <({Uri url, int depth})>[(url: start, depth: 0)];
     var hitPageLimit = false;
     var hitCandidateLimit = false;
+    var hadParseFailure = false;
+    final explorationWarnings = <String>[];
 
     while (queue.isNotEmpty) {
       if (visited.length >= maxCatalogPages) {
@@ -207,10 +212,20 @@ class WebCatalogResolver {
       final item = queue.removeAt(0);
       final normalized = _urlPolicy.normalize(item.url);
       if (!visited.add(normalized)) continue;
-      final page = await (_pageLoader?.call(normalized) ?? _loadHttp(normalized));
-      final decoded = await decodeHtml(page.bytes, page.contentType);
-      final document = html_parser.parse(decoded);
-      final resolution = resolveDocument(page.url, document);
+      late final WebCatalogPage page;
+      late final Document document;
+      late final WebCatalogResolution resolution;
+      try {
+        page = await (_pageLoader?.call(normalized) ?? _loadHttp(normalized));
+        final decoded = await decodeHtml(page.bytes, page.contentType);
+        document = html_parser.parse(decoded);
+        resolution = resolveDocument(page.url, document);
+      } catch (error) {
+        if (normalized == start && pages.isEmpty) rethrow;
+        hadParseFailure = true;
+        explorationWarnings.add('部分目錄頁無法解析：${normalized.host}${normalized.path}');
+        continue;
+      }
       pages.add(resolution);
 
       final nextDepth = resolution.bestCluster == null
@@ -240,6 +255,8 @@ class WebCatalogResolver {
       hasUnvisitedNavigation: queue.isNotEmpty,
       hitPageLimit: hitPageLimit,
       hitCandidateLimit: hitCandidateLimit,
+      hadParseFailure: hadParseFailure,
+      explorationWarnings: explorationWarnings,
     );
   }
 
@@ -250,7 +267,10 @@ class WebCatalogResolver {
       for (var redirects = 0; ; redirects++) {
         _urlPolicy.validate(current, redirectCount: redirects);
         final request = http.Request('GET', current)..followRedirects = false;
-        final streamed = await client.send(request);
+        final streamed = await client.send(request).timeout(
+          requestTimeout,
+          onTimeout: () => throw const WebCatalogException('抓取網頁逾時'),
+        );
         final response = await http.Response.fromStream(streamed);
         if (_isRedirect(response.statusCode)) {
           final location = response.headers['location'];
@@ -396,10 +416,13 @@ class WebCatalogResolver {
     required bool hasUnvisitedNavigation,
     required bool hitPageLimit,
     required bool hitCandidateLimit,
+    required bool hadParseFailure,
+    required List<String> explorationWarnings,
   }) {
     final selected = <WebCatalogLink>[];
     final seen = <Uri>{};
     final warnings = <String>[];
+    warnings.addAll(explorationWarnings);
     for (final page in pages) {
       warnings.addAll(page.warnings);
       final pageUrls = page.clusters
@@ -427,12 +450,15 @@ class WebCatalogResolver {
     final staticInsufficient = ordered.isEmpty || gaps.length > 3;
     final incomplete = hitPageLimit ||
         hitCandidateLimit ||
+        hadParseFailure ||
         hasUnvisitedNavigation ||
         gaps.length > 3;
     final stopReason = hitPageLimit
         ? WebCatalogStopReason.pageLimit
         : hitCandidateLimit
         ? WebCatalogStopReason.candidateLimit
+        : hadParseFailure
+        ? WebCatalogStopReason.parseFailure
         : staticInsufficient
         ? WebCatalogStopReason.staticHtmlInsufficient
         : WebCatalogStopReason.exhausted;

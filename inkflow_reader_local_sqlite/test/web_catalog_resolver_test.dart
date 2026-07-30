@@ -213,4 +213,80 @@ void main() {
       WebCatalogStopReason.staticHtmlInsufficient,
     );
   });
+
+  test('accepts a structurally repeated catalog with non-standard titles', () {
+    final result = resolver().resolveDocument(
+      Uri.parse('https://example.com/book/42/catalog'),
+      Document.html('''
+        <div class="chapter-grid">
+          <a href="/book/42/c1">春日</a>
+          <a href="/book/42/c2">雨夜</a>
+          <a href="/book/42/c3">遠行</a>
+          <a href="/book/42/c4">歸途</a>
+          <a href="/book/42/c5">重逢</a>
+        </div>
+      '''),
+    );
+
+    expect(result.bestCluster!.links, hasLength(5));
+  });
+
+  test('does not cross from a book page into another same-site book', () async {
+    final loaded = <String>[];
+    final service = resolver(
+      loader: (url) async {
+        loaded.add(url.path);
+        final html = switch (url.path) {
+          '/book/42' => '''
+            <div class="actions">
+              <a href="/book/42/catalog">全部章節</a>
+              <a href="/book/99/catalog">推薦作品目錄</a>
+            </div>
+          ''',
+          '/book/42/catalog' => '''
+            <div>
+              <a href="/book/42/1">第1章</a>
+              <a href="/book/42/2">第2章</a>
+              <a href="/book/42/3">第3章</a>
+            </div>
+          ''',
+          _ => throw StateError('crossed into ${url.path}'),
+        };
+        return WebCatalogPage(
+          url: url,
+          bytes: Uint8List.fromList(utf8.encode(html)),
+          contentType: 'text/html; charset=utf-8',
+        );
+      },
+    );
+
+    final result = await service.resolve(Uri.parse('https://example.com/book/42'));
+
+    expect(result.bestCluster!.links, hasLength(3));
+    expect(loaded, isNot(contains('/book/99/catalog')));
+    expect(result.url.path, '/book/42/catalog');
+  });
+
+  test('keeps prologue and extras in website order', () {
+    final result = resolver().resolveDocument(
+      Uri.parse('https://example.com/book/42/catalog'),
+      Document.html('''
+        <div>
+          <a href="/book/42/prologue">序章</a>
+          <a href="/book/42/1">第1章</a>
+          <a href="/book/42/2">第2章</a>
+          <a href="/book/42/extra">番外篇</a>
+          <a href="/book/42/3">第3章</a>
+        </div>
+      '''),
+    );
+
+    expect(result.bestCluster!.links.map((link) => link.text), [
+      '序章',
+      '第1章',
+      '第2章',
+      '番外篇',
+      '第3章',
+    ]);
+  });
 }

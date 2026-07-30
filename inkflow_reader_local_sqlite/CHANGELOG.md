@@ -101,3 +101,10 @@
 
 - 移除 Canvas 固定三頁邏輯。
 - 12,000 字測試可分為 47 頁，全文內容完整保留。
+## 2026-07-31 — M2 目錄探索重構
+
+- 將靜態目錄解析改為頁面角色辨識、目錄入口探索、多訊號候選、受限圖遍歷、多群組合併與完整性診斷。
+- 支援介紹頁、純數字分頁、多卷／多容器、非標準章名與重複最新章節區。
+- 新增 complete／warning／fallbackRequired 與停止原因，供 M7 動態 WebView 備援使用。
+- 修正匯入對話框 TextEditingController 路由卸載時序造成的 Flutter _dependents.isEmpty assertion。
+

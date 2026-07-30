@@ -367,8 +367,7 @@ class WebCatalogResolver {
     required bool hasUnvisitedNavigation,
     required bool hitPageLimit,
     required bool hitCandidateLimit,
-  }
-  ) {
+  }) {
     final selected = <WebCatalogLink>[];
     final seen = <Uri>{};
     final warnings = <String>[];

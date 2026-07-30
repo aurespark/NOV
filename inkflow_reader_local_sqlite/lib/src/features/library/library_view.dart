@@ -210,12 +210,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         urlPolicy: urlPolicy,
       ).resolve(uri);
       final links = resolution.bestCluster?.links ?? const <WebCatalogLink>[];
+      if (resolution.diagnostics.completeness ==
+          WebCatalogCompleteness.fallbackRequired) {
+        await _showCatalogFallback(resolution);
+        return;
+      }
       if (links.isEmpty) {
-        if (resolution.diagnostics.completeness ==
-            WebCatalogCompleteness.fallbackRequired) {
-          await _showCatalogFallback(resolution);
-          return;
-        }
         throw const WebCatalogException('找不到可信的章節目錄，未建立書籍');
       }
       final title = _normalizeWebTitle(resolution.pageTitle ?? uri.host);

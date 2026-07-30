@@ -7,6 +7,7 @@ import '../../core/services/book_file_store.dart';
 import '../../core/services/encoding_service.dart';
 import '../../core/services/library_database.dart';
 import '../../core/services/web_catalog_resolver.dart';
+import '../../core/services/web_url_policy.dart';
 import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
 import '../reader/presentation/reader_view.dart';
@@ -210,23 +211,40 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       ),
     );
     if (!mounted || confirmed != true) return;
-    final uri = Uri.tryParse(url.text.trim());
-    if (uri == null ||
-        !uri.hasScheme ||
-        !(uri.scheme == 'http' || uri.scheme == 'https')) {
-      _message('請輸入有效的 http/https 目錄網址');
+    const urlPolicy = WebUrlPolicy();
+    late final Uri uri;
+    try {
+      uri = urlPolicy.parseAndNormalize(url.text);
+    } on FormatException catch (error) {
+      _message(error.message);
+      return;
+    }
+    final existing = books.where((book) {
+      final catalogUrl = book.catalogUrl;
+      if (book.sourceType != BookSourceType.web || catalogUrl == null) {
+        return false;
+      }
+      try {
+        return urlPolicy.parseAndNormalize(catalogUrl) == uri;
+      } on FormatException {
+        return false;
+      }
+    }).firstOrNull;
+    if (existing != null) {
+      _message('這個來源已在書架中，將開啟現有書籍。');
+      await _open(existing);
       return;
     }
     setState(() => loading = true);
     try {
-      final resolver = WebCatalogResolver();
+      final resolver = WebCatalogResolver(urlPolicy: urlPolicy);
       final resolution = await resolver.resolve(uri);
       final book = Book(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         title: _normalizeWebTitle(resolution.pageTitle ?? uri.host),
         author: '網路書籍',
         sourceType: BookSourceType.web,
-        catalogUrl: url.text.trim(),
+        catalogUrl: resolution.url.toString(),
         catalogSelector: resolution.bestSelector,
         characterOffset: 0,
         currentChapter: '',
@@ -242,6 +260,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
               for (var i = 0; i < links.length; i++)
                 WebChapter(
                   url: links[i].href.toString(),
+                  normalizedUrl: urlPolicy.normalize(links[i].href).toString(),
                   title: links[i].text,
                   position: i,
                 ),

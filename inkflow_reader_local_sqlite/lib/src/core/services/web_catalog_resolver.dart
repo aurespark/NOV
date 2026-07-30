@@ -221,6 +221,11 @@ class WebCatalogResolver {
         document = html_parser.parse(decoded);
         resolution = resolveDocument(page.url, document);
       } catch (error) {
+        if (error is! WebCatalogException &&
+            error is! FormatException &&
+            error is! http.ClientException) {
+          rethrow;
+        }
         if (normalized == start && pages.isEmpty) rethrow;
         hadParseFailure = true;
         explorationWarnings.add('部分目錄頁無法解析：${normalized.host}${normalized.path}');
@@ -800,7 +805,9 @@ class WebCatalogResolver {
   bool _withinBookScope(Uri start, Uri candidate, {required bool isCatalogEntry}) {
     final startTokens = _bookIdentityTokens(start);
     final candidateTokens = _bookIdentityTokens(candidate);
-    if (startTokens.isEmpty) return isCatalogEntry;
+    if (startTokens.isEmpty) {
+      return isCatalogEntry || start.path == candidate.path;
+    }
     return startTokens.any(candidateTokens.contains);
   }
 

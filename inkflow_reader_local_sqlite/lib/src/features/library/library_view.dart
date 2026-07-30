@@ -11,6 +11,7 @@ import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
 import '../reader/presentation/reader_view.dart';
 import 'book.dart';
+import 'web_novel_models.dart';
 import 'web_chapter_list_view.dart';
 
 enum _BookAction { edit, toggleFinished, remove }

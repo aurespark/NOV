@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../reader/domain/reader_models.dart';
 import 'book.dart';
+import 'web_novel_models.dart';
 
 class WebChapterListView extends StatelessWidget {
   const WebChapterListView({

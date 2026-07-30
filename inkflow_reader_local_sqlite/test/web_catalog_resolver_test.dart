@@ -376,4 +376,31 @@ void main() {
     expect(result.diagnostics.completeness, WebCatalogCompleteness.warning);
     expect(result.diagnostics.numberGaps, [3]);
   });
+
+  test('requires fallback when latest-chapter hint exceeds parsed catalog', () async {
+    final service = resolver(
+      loader: (url) async => WebCatalogPage(
+        url: url,
+        bytes: Uint8List.fromList(utf8.encode('''
+          <p>最新章節：第100章</p>
+          <div class="chapters">
+            <a href="/book/42/1">第1章</a>
+            <a href="/book/42/2">第2章</a>
+            <a href="/book/42/3">第3章</a>
+          </div>
+        ''')),
+        contentType: 'text/html; charset=utf-8',
+      ),
+    );
+
+    final result = await service.resolve(
+      Uri.parse('https://example.com/book/42/catalog'),
+    );
+
+    expect(
+      result.diagnostics.completeness,
+      WebCatalogCompleteness.fallbackRequired,
+    );
+    expect(result.diagnostics.latestChapterHint, 100);
+  });
 }

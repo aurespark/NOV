@@ -2,6 +2,23 @@
 
 此檔案記錄墨讀專案每次正式修改。日期以 Asia/Taipei 為準。
 
+## 2026-07-30 — M1 領域模型與 SQLite v4
+
+### 新增
+
+- 新增線上章節、章內分頁、下載錯誤與結果、目錄差異、閱讀定位及下載工作領域模型。
+- 新增 `web_chapter_pages`、`web_chapter_reading_states`、`web_download_jobs` 與查詢索引。
+- 新增領域狀態機、v3 migration、交易回滾、repository CRUD、級聯刪除、快取保留與啟動修復測試。
+- 新增 M1 GitHub Actions 驗證流程。
+
+### 修改
+
+- SQLite schema 由 v3 升級為 v4，migration 保留既有書籍、網頁目錄與閱讀進度。
+- `WebChapter` 擴充下載狀態、正文、重試與錯誤欄位；只有 `complete` 視為已下載。
+- 章節狀態、正文、錯誤與分頁採 transaction 原子寫入；失敗或重新下載開始不覆寫既有正文。
+- 擴充資料庫 repository，集中處理線上章節、分頁、閱讀定位、下載工作、目錄差異與快取管理。
+
+
 ## 2026-07-25 — 閱讀面板響應式修正
 
 - 修正窄螢幕開啟章節與閱讀設定時出現的 `RenderFlex overflowed`。

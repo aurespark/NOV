@@ -52,9 +52,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          readerSettingsProvider.overrideWith(
-            TestReaderSettingsController.new,
-          ),
+          readerSettingsProvider.overrideWith(TestReaderSettingsController.new),
           bookTextProvider.overrideWith(TestBookTextController.new),
         ],
         child: MaterialApp(

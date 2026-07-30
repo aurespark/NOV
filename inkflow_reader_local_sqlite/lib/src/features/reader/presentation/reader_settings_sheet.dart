@@ -60,8 +60,10 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
       _chapterController.jumpTo(0);
       return;
     }
-    final target = (index * _chapterItemExtent - 96)
-        .clamp(0.0, _chapterController.position.maxScrollExtent);
+    final target = (index * _chapterItemExtent - 96).clamp(
+      0.0,
+      _chapterController.position.maxScrollExtent,
+    );
     _chapterController.jumpTo(target);
   }
 
@@ -77,7 +79,8 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
       orElse: () => chapters.first,
     );
 
-    final isDark = ThemeData.estimateBrightnessForColor(value.backgroundColor) ==
+    final isDark =
+        ThemeData.estimateBrightnessForColor(value.backgroundColor) ==
         Brightness.dark;
 
     final sheetTheme = Theme.of(context).copyWith(
@@ -86,18 +89,21 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
       canvasColor: value.backgroundColor,
       cardColor: value.backgroundColor,
       primaryColor: value.textColor,
-      colorScheme: (isDark ? const ColorScheme.dark() : const ColorScheme.light())
-          .copyWith(
-        primary: value.textColor,
-        onPrimary: value.backgroundColor,
-        surface: value.backgroundColor,
-        onSurface: value.textColor,
-      ),
+      colorScheme:
+          (isDark ? const ColorScheme.dark() : const ColorScheme.light())
+              .copyWith(
+                primary: value.textColor,
+                onPrimary: value.backgroundColor,
+                surface: value.backgroundColor,
+                onSurface: value.textColor,
+              ),
       textTheme: Theme.of(context).textTheme.apply(
-            bodyColor: value.textColor,
-            displayColor: value.textColor,
-          ),
-      iconTheme: IconThemeData(color: value.textColor.withAlpha((0.85 * 255).round())),
+        bodyColor: value.textColor,
+        displayColor: value.textColor,
+      ),
+      iconTheme: IconThemeData(
+        color: value.textColor.withAlpha((0.85 * 255).round()),
+      ),
       sliderTheme: Theme.of(context).sliderTheme.copyWith(
         activeTrackColor: value.textColor.withAlpha((0.7 * 255).round()),
         inactiveTrackColor: value.textColor.withAlpha((0.3 * 255).round()),
@@ -106,23 +112,19 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
       ),
       tabBarTheme: TabBarThemeData(
         labelColor: value.textColor,
-        unselectedLabelColor:
-            value.textColor.withAlpha((0.75 * 255).round()),
+        unselectedLabelColor: value.textColor.withAlpha((0.75 * 255).round()),
         indicator: UnderlineTabIndicator(
-          borderSide: BorderSide(
-            color: value.textColor,
-            width: 2,
-          ),
+          borderSide: BorderSide(color: value.textColor, width: 2),
         ),
         indicatorColor: value.textColor,
         dividerColor: value.textColor.withAlpha((0.2 * 255).round()),
       ),
       listTileTheme: Theme.of(context).listTileTheme.copyWith(
-            selectedTileColor: value.textColor.withAlpha((0.12 * 255).round()),
-            iconColor: value.textColor.withAlpha((0.85 * 255).round()),
-            textColor: value.textColor,
-            selectedColor: value.textColor,
-          ),
+        selectedTileColor: value.textColor.withAlpha((0.12 * 255).round()),
+        iconColor: value.textColor.withAlpha((0.85 * 255).round()),
+        textColor: value.textColor,
+        selectedColor: value.textColor,
+      ),
       dividerTheme: DividerThemeData(
         color: value.textColor.withAlpha((0.2 * 255).round()),
         space: 30,
@@ -158,9 +160,10 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
           child: Text(
             '章節',
             style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: value.textColor),
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: value.textColor,
+            ),
           ),
         ),
         Expanded(
@@ -202,9 +205,10 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
           Text(
             '閱讀設定',
             style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: value.textColor),
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: value.textColor,
+            ),
           ),
           const SizedBox(height: 12),
           _slider(
@@ -259,8 +263,8 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
                       border: Border.all(
                         color: value.backgroundColor == theme.$1
                             ? (isDark
-                                ? const Color(0xffd1b399)
-                                : const Color(0xff755842))
+                                  ? const Color(0xffd1b399)
+                                  : const Color(0xff755842))
                             : value.textColor.withAlpha((0.2 * 255).round()),
                         width: 2.5,
                       ),
@@ -281,8 +285,9 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
                   final path = picked?.files.single.path;
                   if (path == null || !context.mounted) return;
                   try {
-                    final loaded =
-                        await FontLoaderService().importAndLoad(path);
+                    final loaded = await FontLoaderService().importAndLoad(
+                      path,
+                    );
                     await controller.update(
                       value.copyWith(
                         fontFamily: loaded.family,
@@ -298,9 +303,7 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
                   } catch (_) {
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('字體匯入失敗，請確認檔案為有效的 TTF'),
-                        ),
+                        const SnackBar(content: Text('字體匯入失敗，請確認檔案為有效的 TTF')),
                       );
                     }
                   }
@@ -423,29 +426,27 @@ class _ReaderSettingsSheetState extends ConsumerState<ReaderSettingsSheet> {
     double max,
     ValueChanged<double> onChanged,
     Color textColor,
-  ) =>
-      Row(
-        children: [
-          SizedBox(
-            width: 74,
-            child: Text(name, style: TextStyle(color: textColor)),
-          ),
-          Expanded(
-            child: Slider(
-              value: value.clamp(min, max),
-              min: min,
-              max: max,
-              onChanged: onChanged,
-            ),
-          ),
-          SizedBox(
-            width: 40,
-            child: Text(
-              value.toStringAsFixed(1),
-              style: TextStyle(color: textColor.withAlpha((0.8 * 255).round())),
-            ),
-          ),
-        ],
-      );
+  ) => Row(
+    children: [
+      SizedBox(
+        width: 74,
+        child: Text(name, style: TextStyle(color: textColor)),
+      ),
+      Expanded(
+        child: Slider(
+          value: value.clamp(min, max),
+          min: min,
+          max: max,
+          onChanged: onChanged,
+        ),
+      ),
+      SizedBox(
+        width: 40,
+        child: Text(
+          value.toStringAsFixed(1),
+          style: TextStyle(color: textColor.withAlpha((0.8 * 255).round())),
+        ),
+      ),
+    ],
+  );
 }
-

@@ -58,10 +58,7 @@ class WebCatalogResolution {
 
   List<ChapterMarker> get chapterHints => bestCluster == null
       ? const [ChapterMarker('全文', 0)]
-      : [
-          for (final link in bestCluster!.links)
-            ChapterMarker(link.text, 0),
-        ];
+      : [for (final link in bestCluster!.links) ChapterMarker(link.text, 0)];
 }
 
 class WebCatalogResolver {
@@ -124,6 +121,14 @@ class WebCatalogResolver {
     } finally {
       client.close();
     }
+<<<<<<< HEAD
+=======
+    return resolveHtml(
+      url,
+      response.bodyBytes,
+      response.headers['content-type'],
+    );
+>>>>>>> 3cf49e0 (確認M1)
   }
 
   bool _isRedirect(int statusCode) =>
@@ -173,11 +178,7 @@ class WebCatalogResolver {
       }
       if (href.fragment.isNotEmpty && href.path.isEmpty) continue;
       result.add(
-        WebCatalogLink(
-          text: text,
-          href: href,
-          domPath: _domPath(element),
-        ),
+        WebCatalogLink(text: text, href: href, domPath: _domPath(element)),
       );
     }
     return result;
@@ -196,7 +197,9 @@ class WebCatalogResolver {
     for (final entry in grouped.entries) {
       final titleScore = _titleScore(entry.value);
       final countScore = _countScore(entry.value.length);
-      final varianceScore = _varianceScore(entry.value.map((item) => item.text.length));
+      final varianceScore = _varianceScore(
+        entry.value.map((item) => item.text.length),
+      );
       final score =
           _titleWeights.$1 * titleScore +
           _titleWeights.$2 * countScore +
@@ -219,7 +222,9 @@ class WebCatalogResolver {
 
   double _titleScore(List<WebCatalogLink> links) {
     if (links.isEmpty) return 0;
-    final matches = links.where((link) => _chapterPattern.hasMatch(link.text)).length;
+    final matches = links
+        .where((link) => _chapterPattern.hasMatch(link.text))
+        .length;
     return matches / links.length;
   }
 
@@ -233,7 +238,8 @@ class WebCatalogResolver {
     final values = lengths.toList();
     if (values.length <= 1) return 1;
     final mean = values.reduce((a, b) => a + b) / values.length;
-    final variance = values
+    final variance =
+        values
             .map((value) => (value - mean) * (value - mean))
             .reduce((a, b) => a + b) /
         values.length;
@@ -268,7 +274,16 @@ class WebCatalogResolver {
       }
     }
 
-    final containerTags = {'ul', 'ol', 'table', 'nav', 'section', 'div', 'article', 'main'};
+    final containerTags = {
+      'ul',
+      'ol',
+      'table',
+      'nav',
+      'section',
+      'div',
+      'article',
+      'main',
+    };
     for (var i = ancestors.length - 1; i >= 0; i--) {
       final tag = ancestors[i].split('#').first.split('.').first;
       if (containerTags.contains(tag)) {
@@ -312,7 +327,9 @@ class WebCatalogResolver {
     final buffer = StringBuffer(element.localName ?? 'node');
     final id = element.id.trim();
     if (id.isNotEmpty) buffer.write('#$id');
-    final classes = element.classes.where((value) => value.trim().isNotEmpty).toList();
+    final classes = element.classes
+        .where((value) => value.trim().isNotEmpty)
+        .toList();
     if (classes.isNotEmpty) {
       buffer.write('.${classes.take(2).join('.')}');
     }
@@ -347,8 +364,10 @@ class WebCatalogResolver {
 
   String? _charsetFromContentType(String? contentType) {
     if (contentType == null) return null;
-    final match = RegExp(r'charset=([A-Za-z0-9_\-]+)', caseSensitive: false)
-        .firstMatch(contentType);
+    final match = RegExp(
+      r'charset=([A-Za-z0-9_\-]+)',
+      caseSensitive: false,
+    ).firstMatch(contentType);
     return match?.group(1)?.toLowerCase();
   }
 }

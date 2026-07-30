@@ -28,13 +28,7 @@ class PaginationEngine {
     while (offset < text.length &&
         pages.length < maxPages &&
         (pages.isEmpty || stopwatch.elapsed < timeBudget)) {
-      final end = _findPageEnd(
-        text,
-        offset,
-        style,
-        viewport,
-        textScaler,
-      );
+      final end = _findPageEnd(text, offset, style, viewport, textScaler);
       pages.add(PageRange(offset, end));
       offset = end;
     }

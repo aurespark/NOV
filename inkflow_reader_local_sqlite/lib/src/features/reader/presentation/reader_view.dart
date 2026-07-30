@@ -9,11 +9,7 @@ import 'reader_controller.dart';
 import 'reader_settings_sheet.dart';
 
 class ReaderView extends ConsumerStatefulWidget {
-  const ReaderView({
-    required this.book,
-    required this.chapters,
-    super.key,
-  });
+  const ReaderView({required this.book, required this.chapters, super.key});
 
   final Book book;
   final List<ChapterMarker> chapters;
@@ -91,9 +87,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     final generation = ++paginationGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && generation == paginationGeneration) {
-        unawaited(
-          _paginate(text, settings, viewport, textScaler, generation),
-        );
+        unawaited(_paginate(text, settings, viewport, textScaler, generation));
       }
     });
   }
@@ -189,9 +183,9 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     }
     pendingChapterOffset = chapter.offset;
     restoreOffset = chapter.offset;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('正在計算章節位置…')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('正在計算章節位置…')));
   }
 
   void _queueProgressSave() {

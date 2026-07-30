@@ -10,7 +10,7 @@ class LibraryDatabase {
     : _databaseFactory = databaseFactory,
       _databasePath = databasePath;
 
-  LibraryDatabase._();
+  LibraryDatabase._() : _databaseFactory = null, _databasePath = null;
 
   static const schemaVersion = 4;
   static final instance = LibraryDatabase._();

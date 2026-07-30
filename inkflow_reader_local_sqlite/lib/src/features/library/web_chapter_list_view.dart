@@ -15,13 +15,9 @@ class WebChapterListView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(book.title),
-      ),
+      appBar: AppBar(title: Text(book.title)),
       body: chapters.isEmpty
-          ? const Center(
-              child: Text('此書沒有找到任何章節'),
-            )
+          ? const Center(child: Text('此書沒有找到任何章節'))
           : ListView.builder(
               itemCount: chapters.length,
               itemBuilder: (context, index) {
@@ -31,9 +27,7 @@ class WebChapterListView extends StatelessWidget {
                   onTap: () {
                     // TODO: Implement chapter content fetching and display
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('TODO: 開啟章節: ${chapter.title}'),
-                      ),
+                      SnackBar(content: Text('TODO: 開啟章節: ${chapter.title}')),
                     );
                   },
                 );

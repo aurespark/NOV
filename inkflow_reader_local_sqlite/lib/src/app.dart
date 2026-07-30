@@ -8,9 +8,7 @@ class InkflowApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
     title: '墨讀',
-    theme: ThemeData.dark(
-      useMaterial3: true,
-    ).copyWith(
+    theme: ThemeData.dark(useMaterial3: true).copyWith(
       colorScheme: const ColorScheme.dark(
         primary: Color(0xffd8c3aa),
         secondary: Color(0xff9ab7a7),

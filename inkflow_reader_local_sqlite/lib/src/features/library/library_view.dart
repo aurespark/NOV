@@ -134,8 +134,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         isFinished: false,
       );
       final chapters = ChapterParser.parse(decoded.text);
-      await LibraryDatabase.instance
-          .insertBook(book, localChapters: chapters);
+      await LibraryDatabase.instance.insertBook(book, localChapters: chapters);
       savedPath = null;
       if (!mounted) return;
       setState(() => books.insert(0, book));
@@ -266,8 +265,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                 ),
             ];
 
-      await LibraryDatabase.instance
-          .insertBook(book, webChapters: webChapters);
+      await LibraryDatabase.instance.insertBook(book, webChapters: webChapters);
 
       if (mounted) {
         setState(() => books.insert(0, book));
@@ -275,9 +273,9 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         final message = chapterCount > 0
             ? '已保存《${book.title}》，並成功識別 $chapterCount 個章節。'
             : '已保存《${book.title}》，但未能自動識別章節列表。';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     } catch (error) {
       _message('新增網路書籍失敗：$error');
@@ -329,9 +327,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       if (!mounted) return;
       ref.read(bookTextProvider.notifier).set(text);
       ref.read(bookTitleProvider.notifier).set(book.title);
-      final updated = await Navigator.of(
-        context,
-      ).push<Book>(
+      final updated = await Navigator.of(context).push<Book>(
         MaterialPageRoute(
           builder: (_) => ReaderView(book: book, chapters: chapters),
         ),
@@ -730,8 +726,8 @@ class _BookTile extends StatelessWidget {
                           ),
                           decoration: BoxDecoration(
                             color: book.sourceType == BookSourceType.local
-                              ? const Color(0xff2d241d)
-                              : const Color(0xff1d2a26),
+                                ? const Color(0xff2d241d)
+                                : const Color(0xff1d2a26),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(

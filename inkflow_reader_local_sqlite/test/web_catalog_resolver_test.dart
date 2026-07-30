@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:html/dom.dart';
 import 'package:inkflow_reader/src/core/services/web_catalog_resolver.dart';

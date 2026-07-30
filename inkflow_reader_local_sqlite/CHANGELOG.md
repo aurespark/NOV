@@ -105,6 +105,8 @@
 
 - 將靜態目錄解析改為頁面角色辨識、目錄入口探索、多訊號候選、受限圖遍歷、多群組合併與完整性診斷。
 - 支援介紹頁、純數字分頁、多卷／多容器、非標準章名與重複最新章節區。
-- 新增 complete／warning／fallbackRequired 與停止原因，供 M7 動態 WebView 備援使用。
+- 新增 complete／warning／fallbackRequired 與停止原因，並比對章號缺口、目錄證據及最新章提示，供 M7 動態 WebView 備援使用。
+- 同書範圍支援 path 與 query 型書 ID；加入連結密度評分，降低導覽／推薦區誤判。
+- 新增 M2 Flutter 驗證 workflow 與匯入對話框 Widget 回歸測試。
 - 修正匯入對話框 TextEditingController 路由卸載時序造成的 Flutter _dependents.isEmpty assertion。
 

@@ -82,6 +82,8 @@ class WebCatalogDiagnostics {
     required this.chapterCount,
     required this.numberGaps,
     required this.hasUnvisitedNavigation,
+    required this.hasCompletenessEvidence,
+    this.latestChapterHint,
   });
 
   final WebCatalogCompleteness completeness;
@@ -92,6 +94,8 @@ class WebCatalogDiagnostics {
   final int chapterCount;
   final List<int> numberGaps;
   final bool hasUnvisitedNavigation;
+  final bool hasCompletenessEvidence;
+  final int? latestChapterHint;
 }
 
 class WebCatalogResolution {
@@ -365,6 +369,14 @@ class WebCatalogResolver {
         if (selectedUrls.contains(_urlPolicy.normalize(link.href))) link,
     ]);
     final best = selected.isEmpty ? null : _buildCluster('merged', selected);
+    final latestChapterHint = _latestChapterHint(bodyText);
+    final hasCompletenessEvidence =
+        document.querySelector(
+          '[id*="catalog"], [class*="catalog"], [id*="chapter"], '
+          '[class*="chapter"], [id*="list"], [class*="list"]',
+        ) !=
+        null ||
+        RegExp(r'(全部章節|完整目錄|章節列表|章節目錄)').hasMatch(bodyText);
     return WebCatalogResolution(
       url: url,
       pageTitle: _extractPageTitle(document),
@@ -386,6 +398,8 @@ class WebCatalogResolver {
         chapterCount: selected.length,
         numberGaps: _chapterNumberGaps(selected),
         hasUnvisitedNavigation: false,
+        hasCompletenessEvidence: hasCompletenessEvidence,
+        latestChapterHint: latestChapterHint,
       ),
     );
   }
@@ -457,13 +471,31 @@ class WebCatalogResolver {
     final ordered = _correctOverallReverse(selected);
     final mergedCluster = ordered.isEmpty ? null : _buildCluster('merged', ordered);
     final gaps = _chapterNumberGaps(ordered);
+    final latestChapterHint = pages
+        .map((page) => page.diagnostics.latestChapterHint)
+        .whereType<int>()
+        .fold<int?>(null, (current, value) =>
+            current == null || value > current ? value : current);
+    final actualLastChapter = ordered
+        .map((link) => chapterNumber(link.text))
+        .whereType<int>()
+        .fold<int?>(null, (current, value) =>
+            current == null || value > current ? value : current);
+    final latestChapterMismatch = latestChapterHint != null &&
+        (actualLastChapter == null || actualLastChapter < latestChapterHint);
+    final hasCompletenessEvidence = visited.length > 1 ||
+        pages.any((page) => page.diagnostics.hasCompletenessEvidence);
     final groupCount = pages.fold<int>(0, (sum, page) => sum + page.clusters.length);
     final staticInsufficient =
-        ordered.isEmpty || gaps.length > 3 || hadParseFailure;
+        ordered.isEmpty ||
+        gaps.length > 3 ||
+        hadParseFailure ||
+        latestChapterMismatch;
     final incomplete = hitPageLimit ||
         hitCandidateLimit ||
         hadParseFailure ||
         hasUnvisitedNavigation ||
+        !hasCompletenessEvidence ||
         gaps.isNotEmpty;
     final stopReason = hitPageLimit
         ? WebCatalogStopReason.pageLimit
@@ -481,6 +513,12 @@ class WebCatalogResolver {
     }
     if (gaps.length > 3) warnings.add('章號存在多個缺口，需使用動態解析確認');
     if (hadParseFailure) warnings.add('部分目錄頁抓取失敗，需使用動態解析確認');
+    if (latestChapterMismatch) {
+      warnings.add('頁面顯示最新第 $latestChapterHint 章，但目前只找到第 '
+          '${actualLastChapter ?? 0} 章');
+    } else if (!hasCompletenessEvidence) {
+      warnings.add('頁面沒有提供可驗證的完整目錄訊號，請確認章節數');
+    }
     if (staticInsufficient) warnings.add('靜態 HTML 未提供足夠章節，需使用動態解析');
     if (!staticInsufficient) warnings.remove('未找到可信的章節目錄');
     return WebCatalogResolution(
@@ -510,6 +548,8 @@ class WebCatalogResolver {
         chapterCount: ordered.length,
         numberGaps: List.unmodifiable(gaps),
         hasUnvisitedNavigation: hasUnvisitedNavigation,
+        hasCompletenessEvidence: hasCompletenessEvidence,
+        latestChapterHint: latestChapterHint,
       ),
     );
   }
@@ -866,7 +906,7 @@ class WebCatalogResolver {
       for (final entry in uri.queryParameters.entries)
         if (const {'id', 'book', 'bookid', 'novel', 'novelid'}
             .contains(entry.key.toLowerCase()))
-          '${entry.key.toLowerCase()}=${entry.value.toLowerCase()}',
+          'book=${entry.value.toLowerCase()}',
     };
     if (queryTokens.isNotEmpty) return queryTokens;
     final segments = uri.pathSegments
@@ -935,6 +975,13 @@ class WebCatalogResolver {
       }
     }
     return result;
+  }
+
+  static int? _latestChapterHint(String text) {
+    final match = RegExp(
+      r'(?:最新章節?|最新更新|更新至)\s*[:：]?\s*(第[0-9０-９一二三四五六七八九十百千零〇兩两]+章)',
+    ).firstMatch(text);
+    return match == null ? null : chapterNumber(match.group(1)!);
   }
 }
 

@@ -35,6 +35,27 @@ const reverseCatalogPage2Html = '''
 <a rel="next" href="/catalog">下一頁</a>
 ''';
 
+
+const dynamicCatalogHtml = '''
+<html><body>
+  <div id="app"></div>
+  <script>
+    document.getElementById('app').innerHTML =
+      '<a href="/c/1">第1章</a><a href="/c/2">第2章</a><a href="/c/3">第3章</a>';
+  </script>
+</body></html>
+''';
+
+const chapterPage1Html = '''
+<article><h1>第一章</h1><p>第一頁正文。</p></article>
+<a href="/c/1?page=2">下一頁</a>
+''';
+
+const chapterPage2Html = '''
+<article><h1>第一章</h1><p>第二頁正文。</p></article>
+<a href="/c/2">下一章</a>
+''';
+
 const blockedPageHtml = '<body>請先登入並完成 CAPTCHA</body>';
 const errorPageHtml = '<body>404 Not Found</body>';
 

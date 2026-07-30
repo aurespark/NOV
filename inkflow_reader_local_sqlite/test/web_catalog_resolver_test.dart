@@ -289,4 +289,91 @@ void main() {
       '第3章',
     ]);
   });
+
+  test('supports query-based book IDs and rejects a shared chapter ID', () async {
+    final loaded = <String>[];
+    final service = resolver(
+      loader: (url) async {
+        loaded.add(url.toString());
+        final html = url.queryParameters['page'] == '2'
+            ? '''
+                <div>
+                  <a href="/book?id=42&chapter=4">第4章</a>
+                  <a href="/book?id=42&chapter=5">第5章</a>
+                  <a href="/book?id=42&chapter=6">第6章</a>
+                </div>
+              '''
+            : '''
+                <div>
+                  <a href="/book?id=42&chapter=1">第1章</a>
+                  <a href="/book?id=42&chapter=2">第2章</a>
+                  <a href="/book?id=42&chapter=3">第3章</a>
+                </div>
+                <nav class="pagination">
+                  <a href="/book?id=42&page=2">2</a>
+                  <a href="/book?id=99&chapter=2">推薦作品目錄</a>
+                </nav>
+              ''';
+        return WebCatalogPage(
+          url: url,
+          bytes: Uint8List.fromList(utf8.encode(html)),
+          contentType: 'text/html; charset=utf-8',
+        );
+      },
+    );
+
+    final result = await service.resolve(
+      Uri.parse('https://example.com/book?id=42'),
+    );
+
+    expect(result.bestCluster!.links, hasLength(6));
+    expect(loaded, everyElement(isNot(contains('id=99'))));
+  });
+
+  test('rejects a low-density repeated navigation container', () {
+    final result = resolver().resolveDocument(
+      Uri.parse('https://example.com/book/42'),
+      Document.html('''
+        <nav>
+          <a href="/category/1">奇幻</a>
+          <a href="/category/2">戀愛</a>
+          <a href="/category/3">歷史</a>
+          <a href="/category/4">科幻</a>
+          <a href="/category/5">推理</a>
+          <a href="/help">說明</a>
+          <a href="/login">會員</a>
+          <a href="/rank">排行</a>
+          <a href="/new">新書</a>
+          <a href="/complete">完本</a>
+        </nav>
+      '''),
+    );
+
+    expect(result.bestCluster, isNull);
+  });
+
+  test('reports small chapter gaps as warning instead of complete', () async {
+    final service = resolver(
+      loader: (url) async => WebCatalogPage(
+        url: url,
+        bytes: Uint8List.fromList(utf8.encode('''
+          <div>
+            <a href="/book/42/1">第1章</a>
+            <a href="/book/42/2">第2章</a>
+            <a href="/book/42/4">第4章</a>
+            <a href="/book/42/5">第5章</a>
+            <a href="/book/42/6">第6章</a>
+          </div>
+        ''')),
+        contentType: 'text/html; charset=utf-8',
+      ),
+    );
+
+    final result = await service.resolve(
+      Uri.parse('https://example.com/book/42/catalog'),
+    );
+
+    expect(result.diagnostics.completeness, WebCatalogCompleteness.warning);
+    expect(result.diagnostics.numberGaps, [3]);
+  });
 }

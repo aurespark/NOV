@@ -176,25 +176,162 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   }
 
   Future<void> _addWeb() async {
-    final url = TextEditingController();
-    final confirmed = await showDialog<bool>(
+    final controller = TextEditingController();
+    final submitted = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('新增網路書籍'),
+        title: const Text('匯入線上小說'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: url,
+              controller: controller,
               autofocus: true,
               keyboardType: TextInputType.url,
               decoration: const InputDecoration(
-                labelText: '目錄 URL',
+                labelText: '小說目錄網址',
                 hintText: 'https://example.com/catalog',
               ),
+              onSubmitted: (value) => Navigator.pop(context, value),
             ),
-            const SizedBox(height: 10),
-            const Text('只需輸入 URL，系統會自動分析頁面並保存可用資訊。'),
+            const SizedBox(height: 12),
+            const Text('僅匯入你有權存取的公開或已授權內容；不會繞過登入、驗證或付費限制。'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('分析目錄'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || submitted == null) return;
+
+    const urlPolicy = WebUrlPolicy();
+    late final Uri uri;
+    try {
+      uri = urlPolicy.parseAndNormalize(submitted);
+    } on FormatException catch (error) {
+      _message(error.message);
+      return;
+    }
+
+    final existing = books.where((book) {
+      if (book.sourceType != BookSourceType.web || book.catalogUrl == null) {
+        return false;
+      }
+      try {
+        return urlPolicy.parseAndNormalize(book.catalogUrl!) == uri;
+      } on FormatException {
+        return false;
+      }
+    }).firstOrNull;
+    if (existing != null) {
+      await _showExistingWebBook(existing);
+      return;
+    }
+
+    setState(() => loading = true);
+    try {
+      final resolution = await WebCatalogResolver(
+        urlPolicy: urlPolicy,
+      ).resolve(uri);
+      final links = resolution.bestCluster?.links ?? const <WebCatalogLink>[];
+      if (links.isEmpty) {
+        throw const WebCatalogException('找不到可信的章節目錄，未建立書籍');
+      }
+      final title = _normalizeWebTitle(resolution.pageTitle ?? uri.host);
+      final confirmed = await _confirmWebImport(
+        title: title,
+        sourceHost: resolution.url.host,
+        chapterCount: links.length,
+        warnings: resolution.warnings,
+      );
+      if (!mounted || !confirmed) return;
+
+      // Recheck immediately before writing so rapid repeated submissions cannot
+      // create a duplicate source in this process.
+      final duplicate = books.where((book) {
+        if (book.sourceType != BookSourceType.web || book.catalogUrl == null) {
+          return false;
+        }
+        try {
+          return urlPolicy.parseAndNormalize(book.catalogUrl!) ==
+              urlPolicy.normalize(resolution.url);
+        } on FormatException {
+          return false;
+        }
+      }).firstOrNull;
+      if (duplicate != null) {
+        await _showExistingWebBook(duplicate);
+        return;
+      }
+
+      final book = Book(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        title: title,
+        author: '網路書籍',
+        sourceType: BookSourceType.web,
+        catalogUrl: urlPolicy.normalize(resolution.url).toString(),
+        catalogSelector: resolution.bestSelector,
+        characterOffset: 0,
+        currentChapter: '',
+        progressRatio: 0,
+        createdAt: DateTime.now(),
+        isFinished: false,
+      );
+      final chapters = [
+        for (var i = 0; i < links.length; i++)
+          WebChapter(
+            url: links[i].href.toString(),
+            normalizedUrl: urlPolicy.normalize(links[i].href).toString(),
+            title: links[i].text,
+            position: i,
+          ),
+      ];
+      await LibraryDatabase.instance.insertBook(book, webChapters: chapters);
+      if (!mounted) return;
+      setState(() => books.insert(0, book));
+      _message('已匯入《${book.title}》，共 ${chapters.length} 章。');
+    } catch (error) {
+      _message('匯入線上小說失敗：$error');
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<bool> _confirmWebImport({
+    required String title,
+    required String sourceHost,
+    required int chapterCount,
+    required List<String> warnings,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('確認匯入'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            Text('來源：$sourceHost'),
+            Text('章節：$chapterCount 章'),
+            if (warnings.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              for (final warning in warnings)
+                Text(
+                  '• $warning',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
           ],
         ),
         actions: [
@@ -204,85 +341,44 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('新增'),
+            child: const Text('確認匯入'),
           ),
         ],
       ),
     );
-    if (!mounted || confirmed != true) return;
-    const urlPolicy = WebUrlPolicy();
-    late final Uri uri;
-    try {
-      uri = urlPolicy.parseAndNormalize(url.text);
-    } on FormatException catch (error) {
-      _message(error.message);
-      return;
-    }
-    final existing = books.where((book) {
-      final catalogUrl = book.catalogUrl;
-      if (book.sourceType != BookSourceType.web || catalogUrl == null) {
-        return false;
-      }
-      try {
-        return urlPolicy.parseAndNormalize(catalogUrl) == uri;
-      } on FormatException {
-        return false;
-      }
-    }).firstOrNull;
-    if (existing != null) {
-      _message('這個來源已在書架中，將開啟現有書籍。');
-      await _open(existing);
-      return;
-    }
-    setState(() => loading = true);
-    try {
-      final resolver = WebCatalogResolver(urlPolicy: urlPolicy);
-      final resolution = await resolver.resolve(uri);
-      final book = Book(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        title: _normalizeWebTitle(resolution.pageTitle ?? uri.host),
-        author: '網路書籍',
-        sourceType: BookSourceType.web,
-        catalogUrl: resolution.url.toString(),
-        catalogSelector: resolution.bestSelector,
-        characterOffset: 0,
-        currentChapter: '',
-        progressRatio: 0,
-        createdAt: DateTime.now(),
-        isFinished: false,
-      );
+    return result ?? false;
+  }
 
-      final links = resolution.bestCluster?.links;
-      final webChapters = links == null
-          ? null
-          : [
-              for (var i = 0; i < links.length; i++)
-                WebChapter(
-                  url: links[i].href.toString(),
-                  normalizedUrl: urlPolicy.normalize(links[i].href).toString(),
-                  title: links[i].text,
-                  position: i,
-                ),
-            ];
-
-      await LibraryDatabase.instance.insertBook(book, webChapters: webChapters);
-
-      if (mounted) {
-        setState(() => books.insert(0, book));
-        final chapterCount = webChapters?.length ?? 0;
-        final message = chapterCount > 0
-            ? '已保存《${book.title}》，並成功識別 $chapterCount 個章節。'
-            : '已保存《${book.title}》，但未能自動識別章節列表。';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(message)));
-      }
-    } catch (error) {
-      _message('新增網路書籍失敗：$error');
-    } finally {
-      if (mounted) setState(() => loading = false);
+  Future<void> _showExistingWebBook(Book book) async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('此來源已存在'),
+        content: Text('《${book.title}》已在書架中，不會建立重複書籍。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, 'update'),
+            child: const Text('更新目錄'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'open'),
+            child: const Text('開啟現有書籍'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'open') {
+      await _open(book);
+    } else if (action == 'update') {
+      _message('目錄更新將於 M5 啟用，目前未新增副本。');
     }
   }
+
 
   String _normalizeWebTitle(String value) {
     final cleaned = value.trim();

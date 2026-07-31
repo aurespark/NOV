@@ -630,14 +630,6 @@ class WebCatalogResolver {
     return result;
   }
 
-  List<WebCatalogLink> _deduplicate(List<WebCatalogLink> links) {
-    final seen = <Uri>{};
-    return [
-      for (final link in links)
-        if (seen.add(_urlPolicy.normalize(link.href))) link,
-    ];
-  }
-
   List<WebCatalogLink> _deduplicateKeepingLast(List<WebCatalogLink> links) {
     final lastIndex = <Uri, int>{};
     for (var i = 0; i < links.length; i++) {

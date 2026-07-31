@@ -217,6 +217,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       ).resolve(uri);
       if (resolution.diagnostics.completeness ==
           WebCatalogCompleteness.fallbackRequired) {
+        if (!mounted) return;
         final dynamicHtml = await SafeWebViewLoader.load(context, uri);
         if (dynamicHtml == null) {
           await _showCatalogFallback(resolution);

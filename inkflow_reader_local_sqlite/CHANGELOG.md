@@ -1,5 +1,14 @@
 # 修改紀錄
 
+## 0.6.0 - 2026-07-31
+
+- 完成 M3～M4：正文密度解析、保守清洗、三次重試、章內分頁、partial 與逐章離線閱讀。
+- 完成 M5：以 URL、章號、標題與相鄰位置比對目錄，確認後以 transaction 套用。
+- 完成 M6：持久化單書單章佇列、800ms 節流與 Android dataSync 前景通知。
+- 完成 M7：HTTP 不足時啟動 30 秒安全 WebView DOM 備援，只展開白名單內容。
+- 完成 M8：逐章閱讀位置、離線狀態、下一章預載、下載狀態及快取清除。
+- 完成 M9：新增正文與目錄差異測試，版本更新為 0.6.0+6。
+
 此檔案記錄墨讀專案每次正式修改。日期以 Asia/Taipei 為準。
 
 
@@ -109,4 +118,3 @@
 - 同書範圍支援 path 與 query 型書 ID；加入連結密度評分，降低導覽／推薦區誤判。
 - 新增 M2 Flutter 驗證 workflow 與匯入對話框 Widget 回歸測試。
 - 修正匯入對話框 TextEditingController 路由卸載時序造成的 Flutter _dependents.isEmpty assertion。
-

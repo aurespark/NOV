@@ -364,7 +364,7 @@ class WebCatalogResolver {
         .expand((cluster) => cluster.links)
         .map((link) => _urlPolicy.normalize(link.href))
         .toSet();
-    final selected = _deduplicateKeepingLast([
+    final selected = _deduplicateKeepingFirst([
       for (final link in rawLinks)
         if (selectedUrls.contains(_urlPolicy.normalize(link.href))) link,
     ]);
@@ -454,15 +454,10 @@ class WebCatalogResolver {
           .expand((cluster) => cluster.links)
           .map((link) => _urlPolicy.normalize(link.href))
           .toSet();
-      final lastIndex = <Uri, int>{};
-      for (var i = 0; i < page.links.length; i++) {
-        lastIndex[_urlPolicy.normalize(page.links[i].href)] = i;
-      }
       for (var i = 0; i < page.links.length; i++) {
         final link = page.links[i];
         final normalized = _urlPolicy.normalize(link.href);
-        if (lastIndex[normalized] == i &&
-            pageUrls.contains(normalized) &&
+        if (pageUrls.contains(normalized) &&
             seen.add(normalized)) {
           selected.add(link);
         }
@@ -630,21 +625,15 @@ class WebCatalogResolver {
     return result;
   }
 
-  List<WebCatalogLink> _deduplicateKeepingLast(List<WebCatalogLink> links) {
-    final lastIndex = <Uri, int>{};
-    for (var i = 0; i < links.length; i++) {
-      lastIndex[_urlPolicy.normalize(links[i].href)] = i;
-    }
-    return [
-      for (var i = 0; i < links.length; i++)
-        if (lastIndex[_urlPolicy.normalize(links[i].href)] == i) links[i],
-    ];
+  List<WebCatalogLink> _deduplicateKeepingFirst(List<WebCatalogLink> links) {
+    final seen = <Uri>{};
+    return [for (final link in links) if (seen.add(_urlPolicy.normalize(link.href))) link];
   }
 
   List<WebCatalogCluster> _clusterLinks(List<WebCatalogLink> links) {
     final grouped = <String, List<WebCatalogLink>>{};
     for (final link in links) {
-      final key = '${_clusterDomKey(link.domPath)}|${_urlTemplate(link.href)}';
+      final key = _clusterDomKey(link.domPath);
       grouped.putIfAbsent(key, () => []).add(link);
     }
     final result = [
@@ -774,10 +763,6 @@ class WebCatalogResolver {
     }
     return ancestors.isEmpty ? 'body' : ancestors.last;
   }
-
-  String _urlTemplate(Uri uri) => uri.pathSegments
-      .map((segment) => segment.replaceAll(RegExp(r'\d+'), '{num}'))
-      .join('/');
 
   String _domPath(Element element) {
     final parts = <String>[];

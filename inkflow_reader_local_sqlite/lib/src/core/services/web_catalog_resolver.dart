@@ -597,8 +597,7 @@ class WebCatalogResolver {
   List<WebCatalogLink> _collectLinks(Uri base, Document document) {
     final result = <WebCatalogLink>[];
     for (final element in document.querySelectorAll('a[href]')) {
-      if (element.parents.any((parent) =>
-          const {'nav', 'header', 'footer'}.contains(parent.localName))) {
+      if (_insideNavigation(element)) {
         continue;
       }
       final text = element.text.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -794,6 +793,17 @@ class WebCatalogResolver {
       current = current.parent!;
     }
     return current;
+  }
+
+  bool _insideNavigation(Element element) {
+    Element? current = element.parent;
+    while (current != null) {
+      if (const {'nav', 'header', 'footer'}.contains(current.localName)) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
   }
 
   String? _extractPageTitle(Document document) {

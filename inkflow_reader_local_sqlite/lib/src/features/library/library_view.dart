@@ -177,7 +177,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   }
 
   String _normalizeWebTitle(String value) {
-    final normalized = value.replaceAll(RegExp(r'\\s+'), ' ').trim();
+    final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
     return normalized.isEmpty ? '未命名小說' : normalized;
   }
 

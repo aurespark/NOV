@@ -42,11 +42,11 @@ The second page.
     expect(restored.progressRatio, .5);
   });
 
-  test('M0 web fixture is stable and does not require public websites', () {
+  test('M0 web fixture is stable and does not require public websites', () async {
     final file = File('test/fixtures/web_catalog/simple_catalog.html');
     final html = file.readAsBytesSync();
 
-    final resolution = WebCatalogResolver().resolveHtml(
+    final resolution = await WebCatalogResolver().resolveHtml(
       Uri.parse('https://example.test/catalog'),
       html,
       'text/html; charset=utf-8',

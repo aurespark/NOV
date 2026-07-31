@@ -558,6 +558,44 @@ class LibraryDatabase {
     ];
   }
 
+  Future<void> deleteWebDownloadJob(String bookId) async {
+    final db = await database;
+    await db.delete('web_download_jobs', where: 'bookId = ?', whereArgs: [bookId]);
+  }
+
+  Future<WebBookSummary> webBookSummary(String bookId) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS complete,
+        SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END) AS partial,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+        SUM(LENGTH(COALESCE(content, ''))) AS characters
+      FROM web_chapters WHERE bookId = ?
+    ''', [bookId]);
+    int value(String key) => (rows.single[key] as int?) ?? 0;
+    return WebBookSummary(
+      total: value('total'), complete: value('complete'), partial: value('partial'),
+      failed: value('failed'), blocked: value('blocked'), characters: value('characters'),
+    );
+  }
+
+  Future<void> clearIncompleteWebCache(String bookId) async {
+    final db = await database;
+    await db.transaction((transaction) async {
+      final rows = await transaction.query('web_chapters', columns: ['id'],
+          where: "bookId = ? AND status IN ('partial','failed')", whereArgs: [bookId]);
+      for (final row in rows) {
+        await transaction.delete('web_chapter_pages', where: 'chapterId = ?', whereArgs: [row['id']]);
+      }
+      await transaction.update('web_chapters', {
+        'content': null, 'status': WebChapterStatus.pending.name, 'isDownloaded': 0,
+        'lastError': null, 'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      }, where: "bookId = ? AND status IN ('partial','failed')", whereArgs: [bookId]);
+    });
+  }
+
   Future<void> applyWebCatalogDiff(String bookId, WebCatalogDiff diff) async {
     final db = await database;
     await db.transaction((transaction) async {
@@ -763,6 +801,19 @@ class LibraryDatabase {
         chapter.updatedAt?.toIso8601String() ??
         DateTime.now().toUtc().toIso8601String(),
   };
+}
+
+class WebBookSummary {
+  const WebBookSummary({required this.total, required this.complete, required this.partial,
+    required this.failed, required this.blocked, required this.characters});
+  final int total;
+  final int complete;
+  final int partial;
+  final int failed;
+  final int blocked;
+  final int characters;
+  double get downloadRatio => total == 0 ? 0 : complete / total;
+  int get approximateBytes => characters * 2;
 }
 
 DateTime? _parseDate(Object? value) =>

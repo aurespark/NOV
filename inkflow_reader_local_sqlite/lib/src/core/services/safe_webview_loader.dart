@@ -50,7 +50,7 @@ class _SafeWebViewLoaderState extends State<SafeWebViewLoader> {
   Future<void> _finish() async {
     if (!mounted) return;
     for (; _clicks < 10; _clicks++) {
-      final clicked = await _controller.runJavaScriptReturningResult('''
+      final clicked = await _controller.runJavaScriptReturningResult(r'''
         (() => {
           const ok = /^(展開全文|閱讀全文|載入更多|顯示更多)$/i;
           const blocked = /(下一章|登入|廣告|下載|安裝)/i;

@@ -45,7 +45,7 @@ class _WebChapterReaderViewState extends State<WebChapterReaderView> with Widget
   void _scheduleSave() { _saveTimer?.cancel(); _saveTimer = Timer(const Duration(seconds: 1), _save); }
   Future<void> _save() async {
     if (!_scroll.hasClients || _chapter.id == null) return;
-    final ratio = _scroll.position.maxScrollExtent <= 0 ? 1.0 : (_scroll.offset / _scroll.position.maxScrollExtent).clamp(0, 1);
+    final ratio = _scroll.position.maxScrollExtent <= 0 ? 1.0 : (_scroll.offset / _scroll.position.maxScrollExtent).clamp(0, 1).toDouble();
     final content = _chapter.content ?? '';
     final paragraphs = content.split(RegExp(r'\n{2,}'));
     final anchor = paragraphs.isEmpty ? null : paragraphs[((paragraphs.length - 1) * ratio).round().clamp(0, paragraphs.length - 1)].trim();

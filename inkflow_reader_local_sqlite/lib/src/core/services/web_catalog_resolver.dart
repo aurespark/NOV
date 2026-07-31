@@ -368,7 +368,11 @@ class WebCatalogResolver {
       for (final link in rawLinks)
         if (selectedUrls.contains(_urlPolicy.normalize(link.href))) link,
     ]);
-    final best = selected.isEmpty ? null : _buildCluster('merged', selected);
+    final best = selected.isEmpty
+        ? null
+        : valid.length == 1
+        ? valid.single
+        : _buildCluster('merged', selected);
     final latestChapterHint = _latestChapterHint(bodyText);
     final hasCompletenessEvidence =
         document.querySelector(
@@ -406,6 +410,7 @@ class WebCatalogResolver {
 
   bool _isValidCluster(WebCatalogCluster cluster) =>
       cluster.links.length >= 3 &&
+      cluster.densityScore >= 0.20 &&
       (cluster.titleScore >= 0.20 ||
           (cluster.links.length >= 5 &&
               cluster.countScore >= 0.40 &&

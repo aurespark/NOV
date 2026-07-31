@@ -13,12 +13,17 @@ class SafeWebViewLoader extends StatefulWidget {
   static Future<String?> load(BuildContext context, Uri uri) async {
     final completer = Completer<String?>();
     late OverlayEntry entry;
+    var removed = false;
+    void complete(String? html) {
+      if (!completer.isCompleted) completer.complete(html);
+      if (!removed) { removed = true; entry.remove(); }
+    }
     entry = OverlayEntry(builder: (_) => SafeWebViewLoader(
       uri: uri,
-      onCompleted: (html) { if (!completer.isCompleted) completer.complete(html); entry.remove(); },
+      onCompleted: complete,
     ));
     Overlay.of(context).insert(entry);
-    return completer.future.timeout(const Duration(seconds: 30), onTimeout: () { entry.remove(); return null; });
+    return completer.future.timeout(const Duration(seconds: 30), onTimeout: () { complete(null); return null; });
   }
 
   static Future<void> openExternal(Uri uri) => launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -29,6 +34,16 @@ class SafeWebViewLoader extends StatefulWidget {
 class _SafeWebViewLoaderState extends State<SafeWebViewLoader> {
   late final WebViewController _controller;
   var _clicks = 0;
+  var _completed = false;
+
+  bool _isSameOrigin(Uri uri) => uri.scheme == widget.uri.scheme &&
+      uri.host == widget.uri.host && uri.port == widget.uri.port;
+
+  void _complete(String? html) {
+    if (_completed) return;
+    _completed = true;
+    widget.onCompleted(html);
+  }
 
   @override void initState() {
     super.initState();
@@ -38,10 +53,10 @@ class _SafeWebViewLoaderState extends State<SafeWebViewLoader> {
       ..setNavigationDelegate(NavigationDelegate(
         onNavigationRequest: (request) {
           final uri = Uri.tryParse(request.url);
-          return uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
+          return uri != null && _isSameOrigin(uri)
               ? NavigationDecision.navigate : NavigationDecision.prevent;
         },
-        onWebResourceError: (_) => widget.onCompleted(null),
+        onWebResourceError: (error) { if (error.isForMainFrame ?? true) _complete(null); },
         onPageFinished: (_) => _finish(),
       ))
       ..loadRequest(widget.uri);
@@ -64,7 +79,7 @@ class _SafeWebViewLoaderState extends State<SafeWebViewLoader> {
     }
     final result = await _controller.runJavaScriptReturningResult('document.documentElement.outerHTML');
     final html = result is String ? result.replaceAll(r'\"', '"').replaceFirst(RegExp(r'^"'), '').replaceFirst(RegExp(r'"$'), '') : null;
-    widget.onCompleted(html);
+    _complete(html);
   }
 
   @override Widget build(BuildContext context) => Positioned.fill(child: IgnorePointer(

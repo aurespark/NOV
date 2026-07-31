@@ -371,7 +371,7 @@ class WebCatalogResolver {
     final best = selected.isEmpty
         ? null
         : valid.length == 1
-        ? valid.single
+        ? _buildCluster(valid.single.key, selected)
         : _buildCluster('merged', selected);
     final latestChapterHint = _latestChapterHint(bodyText);
     final hasCompletenessEvidence =
@@ -597,6 +597,10 @@ class WebCatalogResolver {
   List<WebCatalogLink> _collectLinks(Uri base, Document document) {
     final result = <WebCatalogLink>[];
     for (final element in document.querySelectorAll('a[href]')) {
+      if (element.parents.any((parent) =>
+          const {'nav', 'header', 'footer'}.contains(parent.localName))) {
+        continue;
+      }
       final text = element.text.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (text.isEmpty || text.length > 100 || _blacklist.contains(text)) {
         continue;

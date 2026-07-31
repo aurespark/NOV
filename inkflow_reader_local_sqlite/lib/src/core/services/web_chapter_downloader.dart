@@ -22,14 +22,18 @@ class WebChapterDownloader {
     this.maxPages = 10,
     this.minimumCharacters = 300,
   }) : _client = client ?? http.Client(),
+       _ownsClient = client == null,
        _urlPolicy = urlPolicy ?? const WebUrlPolicy();
 
   final LibraryDatabase database;
   final http.Client _client;
+  final bool _ownsClient;
   final WebUrlPolicy _urlPolicy;
   final DynamicHtmlLoader? dynamicHtmlLoader;
   final int maxPages;
   final int minimumCharacters;
+
+  void close() { if (_ownsClient) _client.close(); }
 
   Future<WebDownloadResult> download(WebChapter chapter) async {
     final chapterId = chapter.id;

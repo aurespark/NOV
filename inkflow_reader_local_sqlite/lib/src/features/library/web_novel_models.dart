@@ -336,11 +336,13 @@ class WebCatalogChange {
     required this.type,
     this.existingChapterId,
     this.incoming,
+    this.confidence = 1,
   });
 
   final WebCatalogChangeType type;
   final int? existingChapterId;
   final WebChapter? incoming;
+  final double confidence;
 }
 
 class WebCatalogDiff {
@@ -398,7 +400,7 @@ class WebChapterReadingState {
 
 enum WebDownloadJobMode { preview, fullBook }
 
-enum WebDownloadJobStatus { pending, running, paused, complete, failed }
+enum WebDownloadJobStatus { pending, running, paused, complete, failed, cancelled }
 
 class WebDownloadJob {
   const WebDownloadJob({
@@ -428,6 +430,28 @@ class WebDownloadJob {
   final String? lastError;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+
+  WebDownloadJob copyWith({
+    WebDownloadJobStatus? status,
+    int? completedCount,
+    int? partialCount,
+    int? failedCount,
+    int? blockedCount,
+    String? lastError,
+  }) => WebDownloadJob(
+    id: id,
+    bookId: bookId,
+    mode: mode,
+    queuePosition: queuePosition,
+    status: status ?? this.status,
+    completedCount: completedCount ?? this.completedCount,
+    partialCount: partialCount ?? this.partialCount,
+    failedCount: failedCount ?? this.failedCount,
+    blockedCount: blockedCount ?? this.blockedCount,
+    lastError: lastError ?? this.lastError,
+    createdAt: createdAt,
+    updatedAt: DateTime.now().toUtc(),
+  );
 }
 
 DateTime? _dateFromMap(Object? value) =>

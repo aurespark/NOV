@@ -104,7 +104,7 @@ class WebUrlPolicy {
     final ipv4 = host.split('.');
     if (ipv4.length == 4) {
       final parts = ipv4.map(int.tryParse).toList();
-      if (parts.any((part) => part == null || part! < 0 || part > 255)) {
+      if (parts.any((part) => part == null || part < 0 || part > 255)) {
         return false;
       }
       final a = parts[0]!;

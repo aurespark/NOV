@@ -1,5 +1,13 @@
 # Inkflow Reader
 
+## v6 線上小說
+
+可從書籍介紹頁或目錄頁匯入線上小說，解析後逐章保存於 SQLite。程式支援靜態與 JavaScript 動態目錄、章內分頁、部分下載、目錄更新、Android 前景下載、離線閱讀、逐章進度與快取清除。
+
+安全限制：只處理 HTTP/HTTPS 公開或已授權內容，不繞過登入、CAPTCHA、DRM 或付費牆；WebView 會拒絕自訂 scheme，並在完成後釋放。
+
+Android 需要網路、通知及 dataSync 前景服務權限。首次大量下載前請確認網路與可用空間。
+
 Inkflow Reader 是一個 Flutter TXT 小說閱讀器。它以本機書庫為核心，支援匯入 `.txt`、記錄閱讀進度、解析章節、調整閱讀版面，也支援從小說目錄 URL 匯入網頁章節清單。
 
 ## 功能

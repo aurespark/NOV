@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +9,10 @@ import '../../core/services/book_file_store.dart';
 import '../../core/services/encoding_service.dart';
 import '../../core/services/library_database.dart';
 import '../../core/services/web_catalog_resolver.dart';
+import '../../core/services/web_catalog_diff_service.dart';
+import '../../core/services/web_chapter_downloader.dart';
+import '../../core/services/web_download_queue.dart';
+import '../../core/services/safe_webview_loader.dart';
 import '../../core/services/web_url_policy.dart';
 import 'web_catalog_import_dialog.dart';
 import '../reader/domain/reader_models.dart';
@@ -176,11 +182,6 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     );
   }
 
-  String _normalizeWebTitle(String value) {
-    final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return normalized.isEmpty ? '未命名小說' : normalized;
-  }
-
   Future<void> _addWeb() async {
     final submitted = await showWebCatalogUrlDialog(context);
     if (!mounted || submitted == null) return;
@@ -211,15 +212,20 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
 
     setState(() => loading = true);
     try {
-      final resolution = await WebCatalogResolver(
+      var resolution = await WebCatalogResolver(
         urlPolicy: urlPolicy,
       ).resolve(uri);
-      final links = resolution.bestCluster?.links ?? const <WebCatalogLink>[];
       if (resolution.diagnostics.completeness ==
           WebCatalogCompleteness.fallbackRequired) {
-        await _showCatalogFallback(resolution);
-        return;
+        final dynamicHtml = await SafeWebViewLoader.load(context, uri);
+        if (dynamicHtml == null) {
+          await _showCatalogFallback(resolution);
+          return;
+        }
+        resolution = await WebCatalogResolver(urlPolicy: urlPolicy)
+            .resolveHtml(uri, utf8.encode(dynamicHtml), 'text/html; charset=utf-8');
       }
+      final links = resolution.bestCluster?.links ?? const <WebCatalogLink>[];
       if (links.isEmpty) {
         throw const WebCatalogException('找不到可信的章節目錄，未建立書籍');
       }
@@ -274,6 +280,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
           ),
       ];
       await LibraryDatabase.instance.insertBook(book, webChapters: chapters);
+      final queue = WebDownloadQueue(
+        database: LibraryDatabase.instance,
+        downloader: WebChapterDownloader(database: LibraryDatabase.instance),
+      );
+      await queue.enqueueBook(book.id);
+      unawaited(queue.run());
       if (!mounted) return;
       setState(() => books.insert(0, book));
       _message('已匯入《${book.title}》，共 ${chapters.length} 章。');
@@ -351,7 +363,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         title: const Text('需要動態解析'),
         content: Text(
           '已檢查 ${resolution.diagnostics.visitedPages} 頁，但靜態網頁沒有提供完整目錄。'
-          '此網站需要 M7 的安全 WebView 備援，目前不會建立不完整書籍。',
+          '動態頁面仍未提供完整目錄，因此不會建立不完整書籍。',
         ),
         actions: [
           FilledButton(
@@ -389,7 +401,36 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     if (action == 'open') {
       await _open(book);
     } else if (action == 'update') {
-      _message('目錄更新將於 M5 啟用，目前未新增副本。');
+      await _updateWebCatalog(book);
+    }
+  }
+
+  Future<void> _updateWebCatalog(Book book) async {
+    final catalogUrl = book.catalogUrl;
+    if (catalogUrl == null) return;
+    setState(() => loading = true);
+    try {
+      final resolution = await WebCatalogResolver().resolve(Uri.parse(catalogUrl));
+      if (resolution.bestCluster == null) throw StateError('無法取得更新後目錄');
+      final existing = await LibraryDatabase.instance.loadWebChapters(book.id);
+      final diff = const WebCatalogDiffService().compare(existing, resolution.bestCluster!.links);
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+        title: const Text('更新目錄'),
+        content: Text('新增 ${diff.added.length} 章、更新 ${diff.updated.length} 章、'
+            '來源移除 ${diff.sourceRemoved.length} 章、未變更 ${diff.unchanged.length} 章'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('套用更新')),
+        ],
+      )) ?? false;
+      if (!confirmed) return;
+      await LibraryDatabase.instance.applyWebCatalogDiff(book.id, diff);
+      _message('目錄已更新');
+    } catch (error) {
+      _message('更新目錄失敗：$error');
+    } finally {
+      if (mounted) setState(() => loading = false);
     }
   }
 
@@ -587,6 +628,14 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     }
+  }
+
+  String _normalizeWebTitle(String value) {
+    final normalized = value
+        .replaceAll(RegExp(r'\s*[-|｜]\s*(目錄|章節列表|小說).*$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return normalized.isEmpty ? '未命名網路小說' : normalized;
   }
 
   @override

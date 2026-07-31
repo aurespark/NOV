@@ -25,20 +25,27 @@ class _WebChapterReaderViewState extends State<WebChapterReaderView> with Widget
   bool _loading = false;
   bool _showPageMarkers = false;
   List<WebChapterPage> _pages = const [];
+  int _restoreGeneration = 0;
 
   @override void initState() { super.initState(); WidgetsBinding.instance.addObserver(this); _scroll.addListener(_scheduleSave); _restore(); }
   @override void dispose() { _save(); _saveTimer?.cancel(); _scroll.dispose(); WidgetsBinding.instance.removeObserver(this); super.dispose(); }
   @override void didChangeAppLifecycleState(AppLifecycleState state) { if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) _save(); }
 
   Future<void> _restore() async {
+    final generation = ++_restoreGeneration;
+    final chapterId = _chapter.id!;
     final prefs = await SharedPreferences.getInstance();
-    final state = await LibraryDatabase.instance.loadWebChapterReadingState(_chapter.id!);
-    _pages = await LibraryDatabase.instance.loadWebChapterPages(_chapter.id!);
-    _showPageMarkers = prefs.getBool('showWebPageMarkers') ?? false;
-    if (!mounted) return;
-    setState(() {});
+    final state = await LibraryDatabase.instance.loadWebChapterReadingState(chapterId);
+    final pages = await LibraryDatabase.instance.loadWebChapterPages(chapterId);
+    if (!mounted || generation != _restoreGeneration || _chapter.id != chapterId) return;
+    setState(() { _pages = pages; _showPageMarkers = prefs.getBool('showWebPageMarkers') ?? false; });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients && state != null) _scroll.jumpTo(_scroll.position.maxScrollExtent * state.progressRatio.clamp(0, 1));
+      if (!mounted || generation != _restoreGeneration || !_scroll.hasClients || state == null) return;
+      final content = _chapter.content ?? '';
+      final anchor = state.paragraphAnchor;
+      final anchorOffset = anchor == null || anchor.isEmpty ? -1 : content.indexOf(anchor);
+      final ratio = anchorOffset >= 0 && content.isNotEmpty ? anchorOffset / content.length : state.progressRatio;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent * ratio.clamp(0, 1));
     });
   }
 
@@ -61,17 +68,18 @@ class _WebChapterReaderViewState extends State<WebChapterReaderView> with Widget
     var target = widget.chapters[nextIndex];
     if (target.content?.trim().isEmpty ?? true) {
       setState(() => _loading = true);
-      try {
-        await WebChapterDownloader(
+      final downloader = WebChapterDownloader(
           database: LibraryDatabase.instance,
           dynamicHtmlLoader: (uri) => SafeWebViewLoader.load(context, uri),
-        ).download(target);
+        );
+      try {
+        await downloader.download(target);
         target = await LibraryDatabase.instance.loadWebChapter(target.id!) ?? target;
       } catch (_) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('此章尚未下載，已保留目前閱讀內容')));
         setState(() => _loading = false);
         return;
-      }
+      } finally { downloader.close(); }
     }
     _index = nextIndex; _chapter = target; _loading = false;
     if (_scroll.hasClients) _scroll.jumpTo(0);
@@ -81,10 +89,11 @@ class _WebChapterReaderViewState extends State<WebChapterReaderView> with Widget
 
   Future<void> _preload(WebChapter chapter) async {
     if (chapter.status != WebChapterStatus.pending) return;
-    try { await WebChapterDownloader(
+    final downloader = WebChapterDownloader(
       database: LibraryDatabase.instance,
       dynamicHtmlLoader: (uri) => SafeWebViewLoader.load(context, uri),
-    ).download(chapter); } catch (_) {}
+    );
+    try { await downloader.download(chapter); } catch (_) {} finally { downloader.close(); }
   }
 
   String _renderContent() {

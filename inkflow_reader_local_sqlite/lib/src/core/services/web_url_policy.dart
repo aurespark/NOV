@@ -21,11 +21,14 @@ class WebUrlPolicy {
     if (parsed == null) {
       throw const FormatException('網址格式無效');
     }
+    final relative = trimmed.startsWith('../') && baseUrl != null
+        ? Uri.parse('../$trimmed')
+        : parsed;
     final resolved = parsed.hasScheme
         ? parsed
         : baseUrl == null
             ? parsed
-            : baseUrl.resolveUri(parsed);
+            : baseUrl.resolveUri(relative);
     return normalize(resolved);
   }
 

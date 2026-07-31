@@ -28,7 +28,7 @@ class WebDownloadQueue {
     _running = true;
     _pauseRequested = false;
     try {
-      try { await _service.invokeMethod<void>('start', {'title': '線上小說下載', 'progress': '準備下載'}); } on MissingPluginException {}
+      try { await _service.invokeMethod<void>('start', {'title': '線上小說下載', 'progress': '準備下載'}); } on MissingPluginException { /* Non-Android test platform. */ }
       for (final job in await database.loadWebDownloadJobs()) {
         if (_pauseRequested) break;
         if (job.status == WebDownloadJobStatus.cancelled || job.status == WebDownloadJobStatus.complete) continue;
@@ -50,7 +50,7 @@ class WebDownloadQueue {
       }
     } finally {
       _running = false;
-      try { await _service.invokeMethod<void>('stop'); } on MissingPluginException {}
+      try { await _service.invokeMethod<void>('stop'); } on MissingPluginException { /* Non-Android test platform. */ }
     }
   }
 

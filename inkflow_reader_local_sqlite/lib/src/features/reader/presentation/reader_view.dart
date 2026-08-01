@@ -267,8 +267,9 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                           child: Text(
                             title,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
+                            style: settings.textStyle.copyWith(
                               fontSize: 12,
+                              height: 1.2,
                               letterSpacing: 1.3,
                               color: settings.textColor.withValues(alpha: .58),
                             ),

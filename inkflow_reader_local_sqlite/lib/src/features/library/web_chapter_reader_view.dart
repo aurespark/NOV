@@ -1,23 +1,34 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/services/library_database.dart';
 import '../../core/services/web_chapter_downloader.dart';
 import '../../core/services/safe_webview_loader.dart';
+import '../reader/domain/reader_models.dart';
+import '../reader/presentation/reader_controller.dart';
 import 'book.dart';
 import 'web_novel_models.dart';
 
-class WebChapterReaderView extends StatefulWidget {
-  const WebChapterReaderView({super.key, required this.book, required this.chapters, required this.initialChapterId});
+class WebChapterReaderView extends ConsumerStatefulWidget {
+  const WebChapterReaderView({
+    super.key,
+    required this.book,
+    required this.chapters,
+    required this.initialChapterId,
+  });
   final Book book;
   final List<WebChapter> chapters;
   final int initialChapterId;
-  @override State<WebChapterReaderView> createState() => _WebChapterReaderViewState();
+  @override
+  ConsumerState<WebChapterReaderView> createState() =>
+      _WebChapterReaderViewState();
 }
 
-class _WebChapterReaderViewState extends State<WebChapterReaderView> with WidgetsBindingObserver {
+class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
+    with WidgetsBindingObserver {
   final _scroll = ScrollController();
   Timer? _saveTimer;
   late int _index = widget.chapters.indexWhere((chapter) => chapter.id == widget.initialChapterId).clamp(0, widget.chapters.length - 1).toInt();
@@ -101,26 +112,112 @@ class _WebChapterReaderViewState extends State<WebChapterReaderView> with Widget
     return _pages.where((p) => p.content != null).map((p) => '${p.pageIndex == 0 ? '' : '—— 第 ${p.pageIndex + 1} 頁 ——\n\n'}${p.content}').join('\n\n');
   }
 
-  @override Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(_chapter.title), actions: [
-      IconButton(tooltip: '原網頁分頁標記', icon: Icon(_showPageMarkers ? Icons.view_agenda : Icons.view_stream), onPressed: () async {
-        final prefs = await SharedPreferences.getInstance();
-        setState(() => _showPageMarkers = !_showPageMarkers);
-        await prefs.setBool('showWebPageMarkers', _showPageMarkers);
-      }),
-    ]),
-    body: _loading ? const Center(child: CircularProgressIndicator()) : SelectionArea(child: SingleChildScrollView(
-      controller: _scroll, padding: const EdgeInsets.fromLTRB(24, 20, 24, 48),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(_chapter.title, style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 24),
-        Text(_renderContent(), style: const TextStyle(fontSize: 19, height: 1.8)),
-        if (_chapter.status == WebChapterStatus.partial) const Padding(padding: EdgeInsets.only(top: 24), child: Text('本章下載不完整', style: TextStyle(color: Colors.orange))),
-      ]),
-    )),
-    bottomNavigationBar: SafeArea(child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-      TextButton.icon(onPressed: _index > 0 ? () => _switch(_index - 1) : null, icon: const Icon(Icons.chevron_left), label: const Text('上一章')),
-      Text('${_index + 1} / ${widget.chapters.length}'),
-      TextButton.icon(onPressed: _index + 1 < widget.chapters.length ? () => _switch(_index + 1) : null, icon: const Icon(Icons.chevron_right), label: const Text('下一章')),
-    ])),
+  @override
+  Widget build(BuildContext context) {
+    final settings = ref.watch(readerSettingsProvider);
+    return Scaffold(
+      backgroundColor: settings.backgroundColor,
+      appBar: AppBar(
+        title: Text(
+          _chapter.title,
+          style: webChapterTitleStyle(settings),
+        ),
+        actions: [
+          IconButton(
+            tooltip: '原網頁分頁標記',
+            icon: Icon(
+              _showPageMarkers ? Icons.view_agenda : Icons.view_stream,
+            ),
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              setState(() => _showPageMarkers = !_showPageMarkers);
+              await prefs.setBool('showWebPageMarkers', _showPageMarkers);
+            },
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SelectionArea(
+              child: SingleChildScrollView(
+                controller: _scroll,
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 48),
+                child: WebChapterBody(
+                  title: _chapter.title,
+                  content: _renderContent(),
+                  settings: settings,
+                  isPartial: _chapter.status == WebChapterStatus.partial,
+                ),
+              ),
+            ),
+      bottomNavigationBar: SafeArea(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            TextButton.icon(
+              onPressed: _index > 0 ? () => _switch(_index - 1) : null,
+              icon: const Icon(Icons.chevron_left),
+              label: const Text('上一章'),
+            ),
+            Text('${_index + 1} / ${widget.chapters.length}'),
+            TextButton.icon(
+              onPressed: _index + 1 < widget.chapters.length
+                  ? () => _switch(_index + 1)
+                  : null,
+              icon: const Icon(Icons.chevron_right),
+              label: const Text('下一章'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+TextStyle webChapterTitleStyle(ReaderSettings settings) =>
+    settings.textStyle.copyWith(
+      fontSize: settings.fontSize + 4,
+      height: 1.35,
+      fontWeight: FontWeight.w600,
+    );
+
+class WebChapterBody extends StatelessWidget {
+  const WebChapterBody({
+    super.key,
+    required this.title,
+    required this.content,
+    required this.settings,
+    required this.isPartial,
+  });
+
+  final String title;
+  final String content;
+  final ReaderSettings settings;
+  final bool isPartial;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        title,
+        key: const ValueKey('web-chapter-title'),
+        style: webChapterTitleStyle(settings),
+      ),
+      const SizedBox(height: 24),
+      Text(
+        content,
+        key: const ValueKey('web-chapter-content'),
+        style: settings.textStyle,
+      ),
+      if (isPartial)
+        const Padding(
+          padding: EdgeInsets.only(top: 24),
+          child: Text(
+            '本章下載不完整',
+            style: TextStyle(color: Colors.orange),
+          ),
+        ),
+    ],
   );
 }

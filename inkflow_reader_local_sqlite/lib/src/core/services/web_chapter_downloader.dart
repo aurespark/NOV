@@ -32,12 +32,34 @@ class WebChapterDownloader {
   final DynamicHtmlLoader? dynamicHtmlLoader;
   final int maxPages;
   final int minimumCharacters;
+  static Future<void> _downloadTail = Future<void>.value();
 
   void close() { if (_ownsClient) _client.close(); }
 
-  Future<WebDownloadResult> download(WebChapter chapter) async {
+  Future<WebDownloadResult> download(WebChapter chapter) {
+    final result = Completer<WebDownloadResult>();
+    _downloadTail = _downloadTail.then((_) async {
+      try {
+        result.complete(await _downloadExclusive(chapter));
+      } catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+      }
+    });
+    return result.future;
+  }
+
+  Future<WebDownloadResult> _downloadExclusive(WebChapter chapter) async {
     final chapterId = chapter.id;
     if (chapterId == null) throw StateError('Chapter must be persisted first');
+    final persisted = await database.loadWebChapter(chapterId) ?? chapter;
+    if (persisted.status == WebChapterStatus.complete &&
+        (persisted.content?.trim().isNotEmpty ?? false)) {
+      return WebDownloadResult(
+        status: WebChapterStatus.complete,
+        content: persisted.content!,
+        pages: await database.loadWebChapterPages(chapterId),
+      );
+    }
     await database.updateWebChapterStatus(
       chapterId,
       WebChapterStatus.downloading,
@@ -45,7 +67,7 @@ class WebChapterDownloader {
     );
     final pages = <WebChapterPage>[];
     final visited = <Uri>{};
-    var current = _urlPolicy.parseAndNormalize(chapter.url);
+    var current = _urlPolicy.parseAndNormalize(persisted.url);
     WebDownloadError? error;
     for (var pageIndex = 0; pageIndex < maxPages; pageIndex++) {
       if (!visited.add(current)) break;
@@ -54,7 +76,7 @@ class WebChapterDownloader {
         final extracted = extract(
           loaded.html,
           pageUrl: loaded.finalUrl,
-          chapterTitle: chapter.title,
+          chapterTitle: persisted.title,
         );
         pages.add(WebChapterPage(
           chapterId: chapterId,

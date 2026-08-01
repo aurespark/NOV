@@ -281,6 +281,9 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
           ),
       ];
       await LibraryDatabase.instance.insertBook(book, webChapters: chapters);
+      final persistedChapters = await LibraryDatabase.instance.loadWebChapters(
+        book.id,
+      );
       final queue = WebDownloadQueue(
         database: LibraryDatabase.instance,
         downloader: WebChapterDownloader(database: LibraryDatabase.instance),
@@ -291,7 +294,10 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       setState(() => books.insert(0, book));
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
-          builder: (_) => WebChapterListView(book: book, chapters: chapters),
+          builder: (_) => WebChapterListView(
+            book: book,
+            chapters: persistedChapters,
+          ),
         ),
       );
     } catch (error) {

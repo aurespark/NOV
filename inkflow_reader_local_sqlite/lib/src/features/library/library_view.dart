@@ -289,7 +289,6 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         downloader: WebChapterDownloader(database: LibraryDatabase.instance),
       );
       await queue.enqueueBook(book.id);
-      unawaited(queue.run());
       if (!mounted) return;
       setState(() => books.insert(0, book));
       await Navigator.of(context).push<void>(
@@ -300,6 +299,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
           ),
         ),
       );
+      unawaited(queue.run());
     } catch (error) {
       _message('匯入線上小說失敗：$error');
     } finally {

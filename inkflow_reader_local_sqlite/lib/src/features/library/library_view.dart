@@ -289,7 +289,11 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       unawaited(queue.run());
       if (!mounted) return;
       setState(() => books.insert(0, book));
-      _message('已匯入《${book.title}》，共 ${chapters.length} 章。');
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => WebChapterListView(book: book, chapters: chapters),
+        ),
+      );
     } catch (error) {
       _message('匯入線上小說失敗：$error');
     } finally {

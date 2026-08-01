@@ -118,6 +118,9 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
     return Scaffold(
       backgroundColor: settings.backgroundColor,
       appBar: AppBar(
+        backgroundColor: settings.backgroundColor,
+        foregroundColor: settings.textColor,
+        surfaceTintColor: Colors.transparent,
         title: Text(
           _chapter.title,
           style: webChapterTitleStyle(settings),

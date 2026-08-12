@@ -43,7 +43,7 @@ void main() {
     );
     await database.insertBook(
       book,
-      webChapters: const [
+      webChapters: [
         WebChapter(
           url: 'https://example.com/chapter-1',
           normalizedUrl: 'https://example.com/chapter-1',

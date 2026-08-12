@@ -284,10 +284,10 @@ packages:
     dependency: transitive
     description:
       name: jni
-      sha256: "5bc9a9daac5ccfbd6a758377600b9f7fdce13d93f26e8012a8941014a5d978d1"
+      sha256: f038e58b4dc2c9037f50e233175086337e0b305e356d28211bf55f21c504cbd3
       url: "https://pub.dev"
     source: hosted
-    version: "1.0.2"
+    version: "1.0.3"
   jni_flutter:
     dependency: transitive
     description:
@@ -340,10 +340,10 @@ packages:
     dependency: transitive
     description:
       name: listen
-      sha256: cb0ad74d7453d8f83a7c1fae401828681ef5df21d41a3a26a04af590c985d085
+      sha256: "47501a08016a43fcad79252439d723f50f14f88fa7bfd8a177e0a417e5c9e1f2"
       url: "https://pub.dev"
     source: hosted
-    version: "1.0.0-beta.4"
+    version: "1.0.1"
   logging:
     dependency: transitive
     description:

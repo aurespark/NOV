@@ -95,9 +95,12 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
       final anchorOffset = anchor == null || anchor.isEmpty
           ? -1
           : content.indexOf(anchor);
-      final ratio = anchorOffset >= 0 && content.isNotEmpty
+      var ratio = anchorOffset >= 0 && content.isNotEmpty
           ? anchorOffset / content.length
           : state.progressRatio;
+      // A completed chapter should reopen from the beginning instead of
+      // restoring to the empty space at the very end of the scroll view.
+      if (ratio >= .98) ratio = 0.0;
       _scroll.jumpTo(_scroll.position.maxScrollExtent * ratio.clamp(0, 1));
     });
   }
@@ -110,7 +113,7 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
   Future<void> _save() async {
     if (!_scroll.hasClients || _chapter.id == null) return;
     final ratio = _scroll.position.maxScrollExtent <= 0
-        ? 1.0
+        ? 0.0
         : (_scroll.offset / _scroll.position.maxScrollExtent)
               .clamp(0, 1)
               .toDouble();

@@ -5,8 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/services/library_database.dart';
-import '../../core/services/web_chapter_downloader.dart';
 import '../../core/services/safe_webview_loader.dart';
+import '../../core/services/web_chapter_downloader.dart';
 import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
 import 'book.dart';
@@ -19,9 +19,11 @@ class WebChapterReaderView extends ConsumerStatefulWidget {
     required this.chapters,
     required this.initialChapterId,
   });
+
   final Book book;
   final List<WebChapter> chapters;
   final int initialChapterId;
+
   @override
   ConsumerState<WebChapterReaderView> createState() =>
       _WebChapterReaderViewState();
@@ -70,9 +72,6 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
     final generation = ++_restoreGeneration;
     final chapterId = _chapter.id!;
     final prefs = await SharedPreferences.getInstance();
-    final state = await LibraryDatabase.instance.loadWebChapterReadingState(
-      chapterId,
-    );
     final pages = await LibraryDatabase.instance.loadWebChapterPages(chapterId);
     if (!mounted ||
         generation != _restoreGeneration ||
@@ -83,25 +82,18 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
       _pages = pages;
       _showPageMarkers = prefs.getBool('showWebPageMarkers') ?? false;
     });
+
+    // V7 blank-page guard: stale saved offsets could restore the reader into
+    // an empty region even though chapter content exists. Until the position
+    // model is rewritten to use measured paragraph anchors, always open a web
+    // chapter from its visible beginning. Progress is still saved below.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
           generation != _restoreGeneration ||
-          !_scroll.hasClients ||
-          state == null) {
+          !_scroll.hasClients) {
         return;
       }
-      final content = _chapter.content ?? '';
-      final anchor = state.paragraphAnchor;
-      final anchorOffset = anchor == null || anchor.isEmpty
-          ? -1
-          : content.indexOf(anchor);
-      var ratio = anchorOffset >= 0 && content.isNotEmpty
-          ? anchorOffset / content.length
-          : state.progressRatio;
-      // A completed chapter should reopen from the beginning instead of
-      // restoring to the empty space at the very end of the scroll view.
-      if (ratio >= .98) ratio = 0.0;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent * ratio.clamp(0, 1));
+      _scroll.jumpTo(0);
     });
   }
 
@@ -203,9 +195,20 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
         .join('\n\n');
   }
 
+  bool _hasVisibleContent(String value) {
+    final sanitized = value
+        .replaceAll(RegExp(r'[\u200B-\u200D\u2060\uFEFF]'), '')
+        .replaceAll(RegExp(r'\s+'), '');
+    if (sanitized.isEmpty) return false;
+    return RegExp(r'[A-Za-z0-9\u3400-\u9FFF]').hasMatch(sanitized);
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(readerSettingsProvider);
+    final renderedContent = _renderContent();
+    final hasVisibleContent = _hasVisibleContent(renderedContent);
+
     return Scaffold(
       backgroundColor: settings.backgroundColor,
       appBar: AppBar(
@@ -236,12 +239,20 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
                 child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 760),
-                    child: WebChapterBody(
-                      title: _chapter.title,
-                      content: _renderContent(),
-                      settings: settings,
-                      isPartial: _chapter.status == WebChapterStatus.partial,
-                    ),
+                    child: hasVisibleContent
+                        ? WebChapterBody(
+                            title: _chapter.title,
+                            content: renderedContent,
+                            settings: settings,
+                            isPartial:
+                                _chapter.status == WebChapterStatus.partial,
+                          )
+                        : _UnreadableChapterNotice(
+                            title: _chapter.title,
+                            settings: settings,
+                            status: _chapter.status,
+                            error: _chapter.lastError,
+                          ),
                   ),
                 ),
               ),
@@ -317,6 +328,35 @@ class WebChapterBody extends StatelessWidget {
           padding: EdgeInsets.only(top: 24),
           child: Text('本章下載不完整', style: TextStyle(color: Colors.orange)),
         ),
+    ],
+  );
+}
+
+class _UnreadableChapterNotice extends StatelessWidget {
+  const _UnreadableChapterNotice({
+    required this.title,
+    required this.settings,
+    required this.status,
+    required this.error,
+  });
+
+  final String title;
+  final ReaderSettings settings;
+  final WebChapterStatus status;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(title, style: webChapterTitleStyle(settings)),
+      const SizedBox(height: 24),
+      Text(
+        '本章沒有可顯示的正文內容。\n'
+        '下載狀態：${status.name}${error == null ? '' : '\n錯誤：$error'}',
+        key: const ValueKey('web-chapter-unreadable'),
+        style: settings.textStyle.copyWith(color: settings.textColor),
+      ),
     ],
   );
 }

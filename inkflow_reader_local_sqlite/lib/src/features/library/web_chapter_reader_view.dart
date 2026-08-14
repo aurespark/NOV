@@ -83,10 +83,6 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
       _showPageMarkers = prefs.getBool('showWebPageMarkers') ?? false;
     });
 
-    // V7 blank-page guard: stale saved offsets could restore the reader into
-    // an empty region even though chapter content exists. Until the position
-    // model is rewritten to use measured paragraph anchors, always open a web
-    // chapter from its visible beginning. Progress is still saved below.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
           generation != _restoreGeneration ||
@@ -258,26 +254,30 @@ class _WebChapterReaderViewState extends ConsumerState<WebChapterReaderView>
               ),
             ),
       bottomNavigationBar: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                TextButton.icon(
-                  onPressed: _index > 0 ? () => _switch(_index - 1) : null,
-                  icon: const Icon(Icons.chevron_left),
-                  label: const Text('上一章'),
-                ),
-                Text('${_index + 1} / ${widget.chapters.length}'),
-                TextButton.icon(
-                  onPressed: _index + 1 < widget.chapters.length
-                      ? () => _switch(_index + 1)
-                      : null,
-                  icon: const Icon(Icons.chevron_right),
-                  label: const Text('下一章'),
-                ),
-              ],
+        top: false,
+        child: SizedBox(
+          height: 56,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  TextButton.icon(
+                    onPressed: _index > 0 ? () => _switch(_index - 1) : null,
+                    icon: const Icon(Icons.chevron_left),
+                    label: const Text('上一章'),
+                  ),
+                  Text('${_index + 1} / ${widget.chapters.length}'),
+                  TextButton.icon(
+                    onPressed: _index + 1 < widget.chapters.length
+                        ? () => _switch(_index + 1)
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                    label: const Text('下一章'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

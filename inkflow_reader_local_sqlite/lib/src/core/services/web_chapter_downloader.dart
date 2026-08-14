@@ -390,7 +390,7 @@ class WebChapterDownloader {
           '\n\n',
         );
     final fragment = html_parser.parseFragment(html);
-    return _normalizeText(fragment.text);
+    return _normalizeText(fragment.text ?? '');
   }
 
   static String _normalizeText(String input) => input

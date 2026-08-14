@@ -267,7 +267,7 @@ class WebChapterDownloader {
     Element? best;
     double bestScore = -1;
     for (final candidate in candidates) {
-      final text = _normalizeText(candidate.text);
+      final text = _extractReadableText(candidate);
       final links = candidate
           .querySelectorAll('a')
           .fold<int>(0, (sum, link) => sum + link.text.length);
@@ -280,7 +280,7 @@ class WebChapterDownloader {
         best = candidate;
       }
     }
-    var content = _normalizeText(best?.text ?? '');
+    var content = _extractReadableText(best);
     content = _removeDuplicateTitle(content, chapterTitle);
     if (_effectiveCharacters(content) < minimumCharacters) {
       throw WebDownloadException(
@@ -374,9 +374,29 @@ class WebChapterDownloader {
     return latin1.decode(bytes, allowInvalid: true);
   }
 
+  static String _extractReadableText(Element? element) {
+    if (element == null) return '';
+
+    final html = element.innerHtml
+        .replaceAll(
+          RegExp(r'<br\s*/?>', caseSensitive: false),
+          '\n',
+        )
+        .replaceAll(
+          RegExp(
+            r'</(?:p|div|section|article|li|blockquote|h[1-6])\s*>',
+            caseSensitive: false,
+          ),
+          '\n\n',
+        );
+    final fragment = html_parser.parseFragment(html);
+    return _normalizeText(fragment.text);
+  }
+
   static String _normalizeText(String input) => input
       .replaceAll('\u00a0', ' ')
-      .split(RegExp(r'\r?\n'))
+      .replaceAll(RegExp(r'\r\n?'), '\n')
+      .split(RegExp(r'\n+'))
       .map((line) => line.replaceAll(RegExp(r'[ \t]+'), ' ').trim())
       .where(
         (line) =>

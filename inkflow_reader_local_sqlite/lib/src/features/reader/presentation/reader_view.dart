@@ -231,8 +231,9 @@ class _ReaderViewState extends ConsumerState<ReaderView>
         child: LayoutBuilder(
           builder: (context, box) {
             const padding = EdgeInsets.fromLTRB(26, 18, 26, 28);
+            final pageWidth = box.maxWidth.clamp(0.0, 760.0);
             final viewport = Size(
-              box.maxWidth - padding.horizontal,
+              pageWidth - padding.horizontal,
               box.maxHeight - padding.vertical - 38,
             );
             _ensurePagination(
@@ -342,15 +343,24 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                               },
                               itemBuilder: (_, index) {
                                 final range = pages[index];
-                                return Padding(
-                                  padding: padding,
-                                  child: Align(
-                                    alignment: Alignment.topLeft,
-                                    child: Text(
-                                      text.substring(range.start, range.end),
-                                      style: settings.textStyle,
-                                      textScaler: MediaQuery.textScalerOf(
-                                        context,
+                                return Center(
+                                  child: SizedBox(
+                                    key: const ValueKey('reader-page-frame'),
+                                    width: pageWidth,
+                                    child: Padding(
+                                      padding: padding,
+                                      child: Align(
+                                        alignment: Alignment.topLeft,
+                                        child: Text(
+                                          text.substring(
+                                            range.start,
+                                            range.end,
+                                          ),
+                                          style: settings.textStyle,
+                                          textScaler: MediaQuery.textScalerOf(
+                                            context,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),

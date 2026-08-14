@@ -10,6 +10,8 @@ void main() {
       fontSize: 23,
       lineHeight: 1.6,
       letterSpacing: .7,
+      backgroundColor: Colors.black,
+      textColor: Color(0xfff2f2f2),
     );
 
     await tester.pumpWidget(
@@ -33,7 +35,9 @@ void main() {
     );
 
     expect(title.style?.fontFamily, 'UserFont_test');
+    expect(title.style?.color, settings.textColor);
     expect(content.style?.fontFamily, 'UserFont_test');
+    expect(content.style?.color, settings.textColor);
     expect(content.style?.fontSize, 23);
     expect(content.style?.height, 1.6);
     expect(content.style?.letterSpacing, .7);

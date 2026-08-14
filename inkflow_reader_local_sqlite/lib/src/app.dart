@@ -8,14 +8,30 @@ class InkflowApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
     title: '墨讀',
-    theme: ThemeData.dark(useMaterial3: true).copyWith(
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      useMaterial3: true,
       colorScheme: const ColorScheme.dark(
-        primary: Color(0xffd8c3aa),
-        secondary: Color(0xff9ab7a7),
-        surface: Color(0xff121212),
+        primary: Color(0xff9bb6a5),
+        secondary: Color(0xffc4aa87),
+        surface: Color(0xff151716),
+        onSurface: Color(0xfff1f0eb),
+        onSurfaceVariant: Color(0xff9a9d98),
       ),
-      scaffoldBackgroundColor: const Color(0xff000000),
-      canvasColor: const Color(0xff000000),
+      scaffoldBackgroundColor: const Color(0xff0b0c0c),
+      canvasColor: const Color(0xff0b0c0c),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xff0b0c0c),
+        surfaceTintColor: Colors.transparent,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: const Color(0xff151716),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+      ),
     ),
     home: const LibraryView(),
   );

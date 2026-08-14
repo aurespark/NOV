@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +23,46 @@ void main() {
       throw const FormatException('fixture');
     },
   );
+
+  Future<String> fixture(String name) =>
+      File('test/fixtures/web_catalog/$name.html').readAsString();
+
+  test('keeps only same-book chapters from a noisy repeated container', () async {
+    final html = await fixture('navigation_noise');
+    final result = await resolver(
+      loader: (url) async => WebCatalogPage(
+        url: url,
+        bytes: Uint8List.fromList(utf8.encode(html)),
+        contentType: 'text/html; charset=utf-8',
+      ),
+    ).resolve(Uri.parse('https://example.com/book/42/catalog'));
+
+    expect(result.bestCluster!.links, hasLength(3));
+    expect(result.bestCluster!.links, everyElement(
+      predicate<WebCatalogLink>((link) => link.href.path.startsWith('/book/42/')),
+    ));
+  });
+
+  test('follows only pagination links in a pagination container', () async {
+    final first = await fixture('real_pagination');
+    final loaded = <String>[];
+    final result = await resolver(
+      loader: (url) async {
+        loaded.add(url.toString());
+        final html = url.queryParameters['page'] == '2'
+            ? '<main class="chapter-list"><a href="/book/42/chapter/4">第四章</a><a href="/book/42/chapter/5">第五章</a><a href="/book/42/chapter/6">第六章</a></main>'
+            : first;
+        return WebCatalogPage(
+          url: url,
+          bytes: Uint8List.fromList(utf8.encode(html)),
+          contentType: 'text/html; charset=utf-8',
+        );
+      },
+    ).resolve(Uri.parse('https://example.com/book/42/catalog'));
+
+    expect(loaded, hasLength(2));
+    expect(result.bestCluster!.links, hasLength(6));
+  });
 
   test('uses header first and meta charset second without Latin-1 fallback', () async {
     final service = resolver();

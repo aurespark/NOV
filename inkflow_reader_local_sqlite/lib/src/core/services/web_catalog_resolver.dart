@@ -227,7 +227,7 @@ class WebCatalogResolver {
         page = await (_pageLoader?.call(normalized) ?? _loadHttp(normalized));
         final decoded = await decodeHtml(page.bytes, page.contentType);
         document = html_parser.parse(decoded);
-        resolution = resolveDocument(page.url, document);
+        resolution = _resolveDocument(page.url, document, scopeUrl: start);
       } catch (error) {
         if (error is! WebCatalogException &&
             error is! FormatException &&
@@ -347,6 +347,14 @@ class WebCatalogResolver {
   }
 
   WebCatalogResolution resolveDocument(Uri url, Document document) {
+    return _resolveDocument(url, document);
+  }
+
+  WebCatalogResolution _resolveDocument(
+    Uri url,
+    Document document, {
+    Uri? scopeUrl,
+  }) {
     final bodyText = document.body?.text ?? document.documentElement?.text ?? '';
     if (_blockedPattern.hasMatch(bodyText)) {
       throw const WebCatalogException('頁面需要登入、驗證或授權，未匯入任何內容');
@@ -355,7 +363,7 @@ class WebCatalogResolver {
       throw const WebCatalogException('來源回傳錯誤頁，未匯入任何內容');
     }
 
-    final rawLinks = _collectLinks(url, document);
+    final rawLinks = _collectLinks(url, document, scopeUrl: scopeUrl);
     final clusters = _clusterLinks(rawLinks);
     final valid = _removeSubsetClusters(
       clusters.where(_isValidCluster).toList(growable: false),
@@ -566,10 +574,12 @@ class WebCatalogResolver {
       final rel = anchor.attributes['rel']?.toLowerCase().split(RegExp(r'\s+'));
       final text = anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
       final parentText = anchor.parent?.text.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
+      final pagerContainer = _looksLikePager(anchor.parent);
       final isPager = (rel?.contains('next') ?? false) ||
           _nextCatalogPattern.hasMatch(text) ||
-          (_pageNumberPattern.hasMatch(text) && _looksLikePager(anchor.parent)) ||
-          _looksLikePaginationHref(anchor.attributes['href'] ?? '');
+          (_pageNumberPattern.hasMatch(text) && pagerContainer) ||
+          (_looksLikePaginationHref(anchor.attributes['href'] ?? '') &&
+              pagerContainer);
       final isCatalogEntry =
           allowCatalogDiscovery && _catalogEntryPattern.hasMatch('$text $parentText');
       final isVolumeEntry =
@@ -594,7 +604,11 @@ class WebCatalogResolver {
     return result;
   }
 
-  List<WebCatalogLink> _collectLinks(Uri base, Document document) {
+  List<WebCatalogLink> _collectLinks(
+    Uri base,
+    Document document, {
+    Uri? scopeUrl,
+  }) {
     final result = <WebCatalogLink>[];
     for (final element in document.querySelectorAll('a[href]')) {
       if (_insideNavigation(element)) {
@@ -616,6 +630,16 @@ class WebCatalogResolver {
           element.attributes['href']!,
           baseUrl: base,
         );
+        if (scopeUrl != null &&
+            (!_sameOrigin(scopeUrl, href) ||
+                (_hasSpecificBookIdentity(scopeUrl) &&
+                    !_withinBookScope(
+                      scopeUrl,
+                      href,
+                      isCatalogEntry: false,
+                    )))) {
+          continue;
+        }
         result.add(
           WebCatalogLink(
             text: text,
@@ -925,6 +949,15 @@ class WebCatalogResolver {
         .take(1)
         .toSet();
   }
+
+  bool _hasSpecificBookIdentity(Uri uri) =>
+      uri.queryParameters.keys.any(
+        (key) => const {'id', 'book', 'bookid', 'novel', 'novelid'}
+            .contains(key.toLowerCase()),
+      ) ||
+      uri.pathSegments
+          .map((segment) => segment.toLowerCase())
+          .any((segment) => const {'book', 'books', 'novel', 'novels'}.contains(segment));
 
   bool _looksLikePageToken(String value) =>
       RegExp(r'^(?:page|p|index)[_-]?\d{1,3}$').hasMatch(value);

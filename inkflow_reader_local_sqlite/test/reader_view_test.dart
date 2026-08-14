@@ -28,9 +28,7 @@ class TestBookTextController extends BookTextController {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('left and right taps both advance to the next page', (
-    tester,
-  ) async {
+  testWidgets('reader paginates taps and caps wide layouts', (tester) async {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -72,6 +70,12 @@ void main() {
     final totalPages = _parseTotalPages(initial);
     expect(totalPages, greaterThan(2));
     expect(initialPage, 1);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('reader-page-frame')).first)
+          .width,
+      360,
+    );
 
     await tester.tapAt(const Offset(24, 320));
     await tester.pump();
@@ -88,6 +92,16 @@ void main() {
     expect(afterRightTap, isNotNull);
     expect(_parseCurrentPage(afterRightTap!), 3);
     expect(_parseTotalPages(afterRightTap), totalPages);
+
+    tester.view.physicalSize = const Size(1200, 800);
+    await tester.pump();
+    await _pumpUntilPageCounterReady(tester);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('reader-page-frame')).first)
+          .width,
+      760,
+    );
     expect(tester.takeException(), isNull);
   });
 }

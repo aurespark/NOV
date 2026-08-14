@@ -10,8 +10,6 @@ import '../../core/services/encoding_service.dart';
 import '../../core/services/library_database.dart';
 import '../../core/services/web_catalog_resolver.dart';
 import '../../core/services/web_catalog_diff_service.dart';
-import '../../core/services/web_chapter_downloader.dart';
-import '../../core/services/web_download_queue.dart';
 import '../../core/services/safe_webview_loader.dart';
 import '../../core/services/web_url_policy.dart';
 import 'web_catalog_import_dialog.dart';
@@ -212,20 +210,8 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
 
     setState(() => loading = true);
     try {
-      var resolution = await WebCatalogResolver(
-        urlPolicy: urlPolicy,
-      ).resolve(uri);
-      if (resolution.diagnostics.completeness ==
-          WebCatalogCompleteness.fallbackRequired) {
-        if (!mounted) return;
-        final dynamicHtml = await SafeWebViewLoader.load(context, uri);
-        if (dynamicHtml == null) {
-          await _showCatalogFallback(resolution);
-          return;
-        }
-        resolution = await WebCatalogResolver(urlPolicy: urlPolicy)
-            .resolveHtml(uri, utf8.encode(dynamicHtml), 'text/html; charset=utf-8');
-      }
+      final resolution = await _resolveWebCatalog(uri, urlPolicy: urlPolicy);
+      if (resolution == null) return;
       final links = resolution.bestCluster?.links ?? const <WebCatalogLink>[];
       if (links.isEmpty) {
         throw const WebCatalogException('找不到可信的章節目錄，未建立書籍');
@@ -284,20 +270,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       final persistedChapters = await LibraryDatabase.instance.loadWebChapters(
         book.id,
       );
-      final queue = WebDownloadQueue(
-        database: LibraryDatabase.instance,
-        downloader: WebChapterDownloader(database: LibraryDatabase.instance),
-      );
-      await queue.enqueueBook(book.id);
-      unawaited(queue.run());
       if (!mounted) return;
       setState(() => books.insert(0, book));
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
-          builder: (_) => WebChapterListView(
-            book: book,
-            chapters: persistedChapters,
-          ),
+          builder: (_) =>
+              WebChapterListView(book: book, chapters: persistedChapters),
         ),
       );
     } catch (error) {
@@ -421,20 +399,37 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     if (catalogUrl == null) return;
     setState(() => loading = true);
     try {
-      final resolution = await WebCatalogResolver().resolve(Uri.parse(catalogUrl));
+      final resolution = await _resolveWebCatalog(Uri.parse(catalogUrl));
+      if (resolution == null) return;
       if (resolution.bestCluster == null) throw StateError('無法取得更新後目錄');
       final existing = await LibraryDatabase.instance.loadWebChapters(book.id);
-      final diff = const WebCatalogDiffService().compare(existing, resolution.bestCluster!.links);
+      final diff = const WebCatalogDiffService().compare(
+        existing,
+        resolution.bestCluster!.links,
+      );
       if (!mounted) return;
-      final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-        title: const Text('更新目錄'),
-        content: Text('新增 ${diff.added.length} 章、更新 ${diff.updated.length} 章、'
-            '來源移除 ${diff.sourceRemoved.length} 章、未變更 ${diff.unchanged.length} 章'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('套用更新')),
-        ],
-      )) ?? false;
+      final confirmed =
+          await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('更新目錄'),
+              content: Text(
+                '新增 ${diff.added.length} 章、更新 ${diff.updated.length} 章、'
+                '來源移除 ${diff.sourceRemoved.length} 章、未變更 ${diff.unchanged.length} 章',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('套用更新'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
       if (!confirmed) return;
       await LibraryDatabase.instance.applyWebCatalogDiff(book.id, diff);
       _message('目錄已更新');
@@ -443,6 +438,29 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     } finally {
       if (mounted) setState(() => loading = false);
     }
+  }
+
+  Future<WebCatalogResolution?> _resolveWebCatalog(
+    Uri uri, {
+    WebUrlPolicy? urlPolicy,
+  }) async {
+    final policy = urlPolicy ?? const WebUrlPolicy();
+    var resolution = await WebCatalogResolver(urlPolicy: policy).resolve(uri);
+    if (resolution.diagnostics.completeness !=
+        WebCatalogCompleteness.fallbackRequired) {
+      return resolution;
+    }
+    if (!mounted) return null;
+    final dynamicHtml = await SafeWebViewLoader.load(context, uri);
+    if (dynamicHtml == null) {
+      await _showCatalogFallback(resolution);
+      return null;
+    }
+    return WebCatalogResolver(urlPolicy: policy).resolveHtml(
+      uri,
+      utf8.encode(dynamicHtml),
+      'text/html; charset=utf-8',
+    );
   }
 
   Future<void> _open(Book book, {String? initialText}) async {
@@ -653,7 +671,6 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   Widget build(BuildContext context) {
     final visible = visibleBooks;
     return Scaffold(
-      backgroundColor: const Color(0xff000000),
       floatingActionButton: books.isEmpty
           ? null
           : FloatingActionButton.extended(
@@ -662,128 +679,132 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
               label: const Text('新增書籍'),
             ),
       body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 22, 16, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '墨讀',
-                          style: TextStyle(
-                            fontFamily: 'serif',
-                            fontSize: 34,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xfff4f1ea),
-                          ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1200),
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 22, 16, 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '墨讀',
+                              style: TextStyle(
+                                fontFamily: 'serif',
+                                fontSize: 34,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 2,
+                              ),
+                            ),
+                            Text(
+                              '你的私人書架',
+                              style: TextStyle(
+                                color: Color(0xff9a9d98),
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                          ],
                         ),
-                        Text(
-                          '你的私人書架',
-                          style: TextStyle(
-                            color: Color(0xffa6a09a),
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  PopupMenuButton<BookSort>(
-                    tooltip: '排序',
-                    initialValue: sort,
-                    onSelected: (value) => setState(() => sort = value),
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: BookSort.lastRead,
-                        child: Text('最後閱讀時間'),
                       ),
-                      PopupMenuItem(value: BookSort.title, child: Text('書名')),
-                      PopupMenuItem(
-                        value: BookSort.progress,
-                        child: Text('閱讀進度'),
+                      PopupMenuButton<BookSort>(
+                        tooltip: '排序',
+                        initialValue: sort,
+                        onSelected: (value) => setState(() => sort = value),
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                            value: BookSort.lastRead,
+                            child: Text('最後閱讀時間'),
+                          ),
+                          PopupMenuItem(
+                            value: BookSort.title,
+                            child: Text('書名'),
+                          ),
+                          PopupMenuItem(
+                            value: BookSort.progress,
+                            child: Text('閱讀進度'),
+                          ),
+                        ],
+                        icon: const Icon(Icons.sort_rounded),
                       ),
                     ],
-                    icon: const Icon(Icons.sort_rounded),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
-              child: TextField(
-                controller: searchController,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: '搜尋書名或作者',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: searchController.text.isEmpty
-                      ? null
-                      : IconButton(
-                          onPressed: () {
-                            searchController.clear();
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                  filled: true,
-                  fillColor: const Color(0xff151515),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
                   ),
                 ),
-              ),
-            ),
-            if (loading) const LinearProgressIndicator(minHeight: 2),
-            Expanded(
-              child: books.isEmpty && !loading
-                  ? _EmptyShelf(onImport: _showImportMenu)
-                  : visible.isEmpty
-                  ? const Center(
-                      child: Text(
-                        '找不到符合的書籍',
-                        style: TextStyle(color: Color(0xffd8d8d8)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 560),
+                      child: TextField(
+                        controller: searchController,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          hintText: '搜尋書名或作者',
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          suffixIcon: searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: '清除搜尋',
+                                  onPressed: () {
+                                    searchController.clear();
+                                    setState(() {});
+                                  },
+                                  icon: const Icon(Icons.close_rounded),
+                                ),
+                        ),
                       ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(18, 2, 18, 100),
-                      itemCount: visible.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 12),
-                      itemBuilder: (_, index) {
-                        final book = visible[index];
-                        return Dismissible(
-                          key: ValueKey(book.id),
-                          direction: DismissDirection.endToStart,
-                          confirmDismiss: (_) async {
-                            await _manage(book);
-                            return false;
-                          },
-                          background: Container(
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 26),
-                            decoration: BoxDecoration(
-                              color: const Color(0xff2a2a2a),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            child: const Icon(
-                              Icons.more_horiz,
-                              color: Color(0xfff2f2f2),
-                            ),
-                          ),
-                          child: _BookTile(
-                            book: book,
-                            onTap: () => _open(book),
-                            onLongPress: () => _manage(book),
-                          ),
-                        );
-                      },
                     ),
+                  ),
+                ),
+                if (loading) const LinearProgressIndicator(minHeight: 2),
+                Expanded(
+                  child: books.isEmpty && !loading
+                      ? _EmptyShelf(onImport: _showImportMenu)
+                      : visible.isEmpty
+                      ? const Center(child: Text('找不到符合的書籍'))
+                      : GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(18, 2, 18, 100),
+                          gridDelegate:
+                              const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 420,
+                                mainAxisExtent: 170,
+                                crossAxisSpacing: 12,
+                                mainAxisSpacing: 12,
+                              ),
+                          itemCount: visible.length,
+                          itemBuilder: (_, index) {
+                            final book = visible[index];
+                            return Dismissible(
+                              key: ValueKey(book.id),
+                              direction: DismissDirection.endToStart,
+                              confirmDismiss: (_) async {
+                                await _manage(book);
+                                return false;
+                              },
+                              background: Container(
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.only(right: 26),
+                                color: const Color(0xff252826),
+                                child: const Icon(Icons.more_horiz),
+                              ),
+                              child: _BookTile(
+                                book: book,
+                                onTap: () => _open(book),
+                                onLongPress: () => _manage(book),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -833,17 +854,25 @@ class _BookTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final percent = (book.progressRatio.clamp(0, 1) * 100).round();
     return Material(
-      color: const Color(0xff141414),
-      borderRadius: BorderRadius.circular(18),
+      color: const Color(0xff151716),
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(18),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Container(
+                width: 3,
+                height: 88,
+                color: book.sourceType == BookSourceType.local
+                    ? const Color(0xffc4aa87)
+                    : const Color(0xff9bb6a5),
+              ),
+              const SizedBox(width: 10),
               _BookCover(book: book),
               const SizedBox(width: 14),
               Expanded(
@@ -858,16 +887,15 @@ class _BookTile extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 17,
                               fontWeight: FontWeight.w700,
-                              color: Color(0xfff3f3f3),
                             ),
                           ),
                         ),
                         if (book.isFinished)
                           const Icon(
                             Icons.check_circle,
-                            color: Color(0xff8db89d),
+                            color: Color(0xff9bb6a5),
                             size: 19,
                           ),
                       ],
@@ -877,7 +905,7 @@ class _BookTile extends StatelessWidget {
                       book.author,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Color(0xffb3b3b3)),
+                      style: const TextStyle(color: Color(0xff9a9d98)),
                     ),
                     const SizedBox(height: 10),
                     Row(
@@ -906,7 +934,6 @@ class _BookTile extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xfff3f3f3),
                           ),
                         ),
                       ],
@@ -916,9 +943,9 @@ class _BookTile extends StatelessWidget {
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
                         value: book.progressRatio.clamp(0, 1),
-                        minHeight: 5,
-                        color: const Color(0xff8d7b6a),
-                        backgroundColor: const Color(0xff2a2a2a),
+                        minHeight: 3,
+                        color: const Color(0xff9bb6a5),
+                        backgroundColor: const Color(0xff292c2a),
                       ),
                     ),
                     const SizedBox(height: 7),
@@ -926,7 +953,7 @@ class _BookTile extends StatelessWidget {
                       _lastRead(book.lastReadAt),
                       style: const TextStyle(
                         fontSize: 11,
-                        color: Color(0xff8f8f8f),
+                        color: Color(0xff7d817d),
                       ),
                     ),
                   ],
@@ -960,7 +987,7 @@ class _BookCover extends StatelessWidget {
     final path = book.coverPath;
     if (path != null && File(path).existsSync()) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(9),
+        borderRadius: BorderRadius.circular(4),
         child: Image.file(File(path), width: 64, height: 88, fit: BoxFit.cover),
       );
     }
@@ -974,12 +1001,9 @@ class _BookCover extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: book.sourceType == BookSourceType.local
-            ? const Color(0xff4c3a2f)
-            : const Color(0xff3b4c46),
-        borderRadius: BorderRadius.circular(9),
-        boxShadow: const [
-          BoxShadow(color: Colors.black54, blurRadius: 8, offset: Offset(2, 4)),
-        ],
+            ? const Color(0xff453a30)
+            : const Color(0xff304039),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
         label,
@@ -987,7 +1011,7 @@ class _BookCover extends StatelessWidget {
         style: const TextStyle(
           color: Color(0xfff2f2f2),
           fontFamily: 'serif',
-          fontSize: 17,
+          fontSize: 16,
           fontWeight: FontWeight.w700,
         ),
       ),

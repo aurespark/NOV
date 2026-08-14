@@ -232,9 +232,14 @@ class _ReaderViewState extends ConsumerState<ReaderView>
           builder: (context, box) {
             const padding = EdgeInsets.fromLTRB(26, 18, 26, 28);
             final pageWidth = box.maxWidth.clamp(0.0, 760.0);
+            final halfLineSafety =
+                settings.fontSize * settings.lineHeight * 0.5;
             final viewport = Size(
               pageWidth - padding.horizontal,
-              box.maxHeight - padding.vertical - 38,
+              (box.maxHeight - padding.vertical - 38 - halfLineSafety).clamp(
+                1.0,
+                double.infinity,
+              ),
             );
             _ensurePagination(
               text,

@@ -42,8 +42,19 @@ class PaginationEngine {
     Size viewport,
     TextScaler textScaler,
   ) {
-    // ponytail: 4096 is only the first probe; it expands when one page needs
-    // more text, so correctness does not depend on a fixed characters-per-page.
+    // Keep a small vertical safety margin. Some Android font metrics report
+    // the last line as fitting while its descenders are still clipped by the
+    // real widget bounds. Reserving part of one line prevents the bottom row
+    // from being cut off without changing the horizontal layout.
+    final estimatedLineHeight =
+        (style.fontSize ?? 16) * (style.height ?? 1.0);
+    final safeHeight =
+        (viewport.height - estimatedLineHeight * 0.45)
+            .clamp(1.0, double.infinity)
+            .toDouble();
+
+    // 4096 is only the first probe; it expands when one page needs more text,
+    // so correctness does not depend on a fixed characters-per-page.
     var probeLength = 4096;
     while (true) {
       final probeEnd = (start + probeLength).clamp(0, text.length);
@@ -56,7 +67,7 @@ class PaginationEngine {
       final lines = painter.computeLineMetrics();
       var height = 0.0;
       for (final line in lines) {
-        if (height > 0 && height + line.height > viewport.height) {
+        if (height > 0 && height + line.height > safeHeight) {
           final y = line.baseline - line.ascent + .01;
           final position = painter.getPositionForOffset(Offset(0, y));
           final localEnd = painter.getLineBoundary(position).start;

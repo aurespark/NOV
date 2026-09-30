@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+
 import '../../features/library/book.dart';
 import '../../features/reader/domain/reader_models.dart';
 
@@ -21,7 +23,7 @@ class LibraryDatabase {
 
     return await openDatabase(
       path,
-      version: 2, // 升級為版本 2
+      version: 2, // v2 版本
       onCreate: _createDb,
       onUpgrade: _onUpgrade,
       onConfigure: (db) async {
@@ -103,8 +105,138 @@ class LibraryDatabase {
     }
   }
 
-  // --- 目錄批次寫入與快取操作 ---
+  // =========================================================================
+  // 原始書架與閱讀進度 CRUD 方法 (恢復原有系統運作)
+  // =========================================================================
 
+  /// 載入所有書籍與閱讀進度
+  Future<List<Book>> loadBooks() async {
+    final db = await database;
+    final results = await db.rawQuery('''
+      SELECT b.*, r.characterOffset, r.currentChapter, r.progressRatio, r.lastReadAt
+      FROM books b
+      LEFT JOIN reading_states r ON b.id = r.bookId
+      ORDER BY b.createdAt DESC
+    ''');
+    return results.map((row) => Book.fromMap(row)).toList();
+  }
+
+  /// 新增書籍（含章節清單）
+  Future<void> insertBook(Book book, [List<ChapterMarker> chapters = const []]) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert(
+        'books',
+        book.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      await txn.insert(
+        'reading_states',
+        {
+          'bookId': book.id,
+          'characterOffset': book.characterOffset,
+          'currentChapter': book.currentChapter,
+          'progressRatio': book.progressRatio,
+          'lastReadAt': book.lastReadAt?.toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      if (chapters.isNotEmpty) {
+        final batch = txn.batch();
+        for (int i = 0; i < chapters.length; i++) {
+          final ch = chapters[i];
+          batch.insert(
+            'chapters',
+            {
+              'bookId': book.id,
+              'chapterIndex': i,
+              'title': ch.title,
+              'characterOffset': ch.offset,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        await batch.commit(noResult: true);
+      }
+    });
+  }
+
+  /// 載入本地書籍章節（ChapterMarker）
+  Future<List<ChapterMarker>> loadChapters(String bookId) async {
+    final db = await database;
+    final list = await db.query(
+      'chapters',
+      where: 'bookId = ?',
+      whereArgs: [bookId],
+      orderBy: 'chapterIndex ASC',
+    );
+    return list
+        .map((row) => ChapterMarker(
+              row['title'] as String,
+              row['characterOffset'] as int? ?? 0,
+            ))
+        .toList();
+  }
+
+  /// 替換/重建章節清單
+  Future<void> replaceChapters(String bookId, List<ChapterMarker> chapters) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete('chapters', where: 'bookId = ?', whereArgs: [bookId]);
+      final batch = txn.batch();
+      for (int i = 0; i < chapters.length; i++) {
+        final ch = chapters[i];
+        batch.insert('chapters', {
+          'bookId': bookId,
+          'chapterIndex': i,
+          'title': ch.title,
+          'characterOffset': ch.offset,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  /// 更新書籍基本資料
+  Future<void> updateBook(Book book) async {
+    final db = await database;
+    await db.update(
+      'books',
+      book.toMap(),
+      where: 'id = ?',
+      whereArgs: [book.id],
+    );
+  }
+
+  /// 儲存/更新閱讀進度
+  Future<void> saveProgress(Book book) async {
+    final db = await database;
+    await db.insert(
+      'reading_states',
+      {
+        'bookId': book.id,
+        'characterOffset': book.characterOffset,
+        'currentChapter': book.currentChapter,
+        'progressRatio': book.progressRatio,
+        'lastReadAt': (book.lastReadAt ?? DateTime.now()).toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// 刪除書籍（CASCADE 會自動刪除對應的 reading_states 與 chapters）
+  Future<void> deleteBook(String bookId) async {
+    final db = await database;
+    await db.delete('books', where: 'id = ?', whereArgs: [bookId]);
+  }
+
+  // =========================================================================
+  // 線上小說優化方法 (階段一～階段四新增)
+  // =========================================================================
+
+  /// 批次寫入或更新線上目錄
   Future<void> insertOrUpdateCatalog(String bookId, List<Map<String, dynamic>> chapterList) async {
     final db = await database;
     final batch = db.batch();
@@ -128,6 +260,7 @@ class LibraryDatabase {
     await batch.commit(noResult: true);
   }
 
+  /// 儲存單一章節快取內文
   Future<void> saveChapterContent(String bookId, int chapterIndex, String content) async {
     final db = await database;
     await db.update(
@@ -142,6 +275,7 @@ class LibraryDatabase {
     );
   }
 
+  /// 取得指定章節快取
   Future<Map<String, dynamic>?> getChapter(String bookId, int chapterIndex) async {
     final db = await database;
     final list = await db.query(
@@ -153,6 +287,7 @@ class LibraryDatabase {
     return list.isNotEmpty ? list.first : null;
   }
 
+  /// 取得未快取章節列表
   Future<List<Map<String, dynamic>>> getUncachedChapters(String bookId) async {
     final db = await database;
     return await db.query(

@@ -285,4 +285,76 @@ class WebCatalogResolver {
     }
     return url;
   }
+
+  /// 自動從網址提取書籍元資料（書名、作者、封面）與目錄章節
+  Future<({String title, String author, String? coverUrl, List<ChapterItem> chapters})>
+      fetchBookInfoAndCatalog({
+    required String rawUrl,
+    String? bookId,
+  }) async {
+    final normalizedUrl = _normalizeUrl(rawUrl);
+    final uri = Uri.parse(normalizedUrl);
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('無法連線至該小說網址 (HTTP ${response.statusCode})');
+    }
+
+    String htmlContent;
+    try {
+      htmlContent = utf8.decode(response.bodyBytes);
+    } catch (_) {
+      htmlContent = response.body;
+    }
+
+    final doc = html_parser.parse(htmlContent);
+
+    // 1. 自動辨識書名（優先讀取 OpenGraph meta，再讀取 h1 / title）
+    String? title = doc.querySelector('meta[property="og:novel:book_name"]')?.attributes['content'] ??
+        doc.querySelector('meta[property="og:title"]')?.attributes['content'] ??
+        doc.querySelector('h1')?.text.trim();
+
+    if (title == null || title.isEmpty) {
+      final rawTitle = doc.querySelector('title')?.text.trim() ?? '';
+      title = rawTitle.split(RegExp(r'[_|\-–—]')).first.trim();
+    }
+    if (title.isEmpty) title = '線上小說';
+
+    // 2. 自動辨識作者
+    String? author = doc.querySelector('meta[property="og:novel:author"]')?.attributes['content'] ??
+        doc.querySelector('meta[name="author"]')?.attributes['content'];
+
+    if (author == null || author.isEmpty) {
+      final authorMatch = RegExp(r'作\s*者[：:\s]+([^\s<，,\|\n]+)').firstMatch(htmlContent);
+      if (authorMatch != null) {
+        author = authorMatch.group(1)?.trim();
+      }
+    }
+    author ??= '網路來源';
+
+    // 3. 封面圖
+    final coverUrl = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+
+    // 4. 自動識別章節目錄
+    final targetBookId = bookId ?? DateTime.now().millisecondsSinceEpoch.toString();
+    final resolveResult = resolve(
+      bookId: targetBookId,
+      rawUrl: normalizedUrl,
+      htmlContent: htmlContent,
+    );
+
+    return (
+      title: title,
+      author: author,
+      coverUrl: coverUrl != null ? _resolveUrl(uri, coverUrl) : null,
+      chapters: resolveResult.chapters,
+    );
+  }
 }

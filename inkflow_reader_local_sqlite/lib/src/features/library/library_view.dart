@@ -3,9 +3,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
+
 import '../../core/services/book_file_store.dart';
+import '../../core/services/chapter_reader_service.dart';
 import '../../core/services/encoding_service.dart';
 import '../../core/services/library_database.dart';
+import '../../core/services/web_catalog_resolver.dart';
 import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
 import '../reader/presentation/reader_view.dart';
@@ -35,7 +38,12 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     setState(() => loading = true);
     try {
       final saved = await LibraryDatabase.instance.loadBooks();
-      if (mounted) setState(() => books.addAll(saved));
+      if (mounted) {
+        setState(() {
+          books.clear();
+          books.addAll(saved);
+        });
+      }
     } catch (error) {
       _message('無法載入書架：$error');
     } finally {
@@ -171,104 +179,173 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
     );
   }
 
+  /// 僅需輸入目錄網址，自動辨識書名、作者與章節
   Future<void> _addWeb() async {
-    final title = TextEditingController();
-    final author = TextEditingController();
-    final url = TextEditingController();
-    final confirmed = await showDialog<bool>(
+    final urlController = TextEditingController();
+    var isResolving = false;
+
+    await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('新增網路書籍'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: title,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: '書名'),
+      barrierDismissible: !isResolving,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('新增網路書籍'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '貼上小說目錄或主頁網址，將自動辨識書名、作者與章節：',
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: urlController,
+                autofocus: true,
+                enabled: !isResolving,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: '目錄 URL',
+                  hintText: 'https://...',
+                  prefixIcon: Icon(Icons.link_rounded),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (isResolving) ...[
+                const SizedBox(height: 16),
+                const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 12),
+                    Text('正在自動獲取書名與章節...'),
+                  ],
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isResolving ? null : () => Navigator.pop(context),
+              child: const Text('取消'),
             ),
-            TextField(
-              controller: author,
-              decoration: const InputDecoration(labelText: '作者'),
-            ),
-            TextField(
-              controller: url,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(labelText: '目錄 URL'),
+            FilledButton(
+              onPressed: isResolving
+                  ? null
+                  : () async {
+                      final rawUrl = urlController.text.trim();
+                      if (rawUrl.isEmpty) {
+                        _message('請輸入有效的小說網址');
+                        return;
+                      }
+
+                      setDialogState(() => isResolving = true);
+
+                      try {
+                        final id = DateTime.now().microsecondsSinceEpoch.toString();
+
+                        // 1. 自動從網址抓取書名、作者與章節目錄
+                        final info = await WebCatalogResolver.instance.fetchBookInfoAndCatalog(
+                          rawUrl: rawUrl,
+                          bookId: id,
+                        );
+
+                        // 2. 構建書籍主檔
+                        final book = Book(
+                          id: id,
+                          title: info.title,
+                          author: info.author,
+                          sourceType: BookSourceType.web,
+                          catalogUrl: rawUrl,
+                          coverPath: info.coverUrl,
+                          characterOffset: 0,
+                          currentChapter: info.chapters.isNotEmpty ? info.chapters.first.title : '',
+                          progressRatio: 0,
+                          createdAt: DateTime.now(),
+                          isFinished: false,
+                        );
+
+                        // 3. 寫入書籍主檔與章節標記
+                        final markers = [
+                          for (final ch in info.chapters)
+                            ChapterMarker(ch.title, ch.characterOffset),
+                        ];
+                        await LibraryDatabase.instance.insertBook(book, markers);
+
+                        // 4. 批次寫入線上詳細目錄
+                        final chapterMaps = info.chapters.map((c) => c.toMap()).toList();
+                        await LibraryDatabase.instance.insertOrUpdateCatalog(id, chapterMaps);
+
+                        // 5. 背景預加載第一章，提升開卷速度
+                        ChapterReaderService.instance.loadChapter(bookId: id, chapterIndex: 0);
+
+                        if (mounted) {
+                          Navigator.pop(context);
+                          setState(() => books.insert(0, book));
+                          _message('成功匯入《${info.title}》，共 ${info.chapters.length} 章！');
+                        }
+                      } catch (error) {
+                        setDialogState(() => isResolving = false);
+                        _message('自動解析失敗：$error');
+                      }
+                    },
+              child: const Text('開始匯入'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('新增'),
-          ),
-        ],
       ),
     );
-    if (!mounted || confirmed != true) return;
-    final uri = Uri.tryParse(url.text.trim());
-    if (title.text.trim().isEmpty ||
-        uri == null ||
-        !uri.hasScheme ||
-        !(uri.scheme == 'http' || uri.scheme == 'https')) {
-      _message('請輸入書名及有效的 http/https 目錄網址');
-      return;
-    }
-    final book = Book(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      title: title.text.trim(),
-      author: author.text.trim().isEmpty ? '未知作者' : author.text.trim(),
-      sourceType: BookSourceType.web,
-      catalogUrl: url.text.trim(),
-      characterOffset: 0,
-      currentChapter: '',
-      progressRatio: 0,
-      createdAt: DateTime.now(),
-      isFinished: false,
-    );
-    await LibraryDatabase.instance.insertBook(book, const []);
-    if (mounted) setState(() => books.insert(0, book));
   }
 
   Future<void> _open(Book book, {String? initialText}) async {
-    if (book.sourceType == BookSourceType.web) {
-      _message('已保存網路目錄；內容下載需由網站爬蟲模組提供');
-      return;
-    }
-    final path = book.localPath;
-    if (path == null || !await File(path).exists()) {
-      _message('找不到《${book.title}》的本機 TXT 檔案');
-      return;
-    }
-    if (!mounted) return;
     setState(() => loading = true);
     try {
-      final encoding = TextEncoding.values.firstWhere(
-        (value) => value.name == book.textEncoding,
-        orElse: () => TextEncoding.auto,
-      );
-      final text =
-          initialText ??
-          (await EncodingService().decode(
-            await File(path).readAsBytes(),
-            encoding,
-          )).text;
+      String text;
       var chapters = await LibraryDatabase.instance.loadChapters(book.id);
-      if (chapters.isEmpty) {
-        chapters = ChapterParser.parse(text);
-        await LibraryDatabase.instance.replaceChapters(book.id, chapters);
+
+      if (book.sourceType == BookSourceType.web) {
+        // 線上小說：從 ChapterReaderService 載入正文
+        final chapterResult = await ChapterReaderService.instance.loadChapter(
+          bookId: book.id,
+          chapterIndex: 0,
+        );
+        if (chapterResult.content != null && chapterResult.content!.isNotEmpty) {
+          text = chapterResult.content!;
+        } else {
+          _message('無法讀取《${book.title}》的線上內文');
+          return;
+        }
+      } else {
+        // 本地 TXT
+        final path = book.localPath;
+        if (path == null || !await File(path).exists()) {
+          _message('找不到《${book.title}》的本機 TXT 檔案');
+          return;
+        }
+        final encoding = TextEncoding.values.firstWhere(
+          (value) => value.name == book.textEncoding,
+          orElse: () => TextEncoding.auto,
+        );
+        text = initialText ??
+            (await EncodingService().decode(
+              await File(path).readAsBytes(),
+              encoding,
+            )).text;
+
+        if (chapters.isEmpty) {
+          chapters = ChapterParser.parse(text);
+          await LibraryDatabase.instance.replaceChapters(book.id, chapters);
+        }
       }
+
       if (!mounted) return;
       ref.read(bookTextProvider.notifier).set(text);
       ref.read(bookTitleProvider.notifier).set(book.title);
-      final updated = await Navigator.of(
-        context,
-      ).push<Book>(
+      final updated = await Navigator.of(context).push<Book>(
         MaterialPageRoute(
           builder: (_) => ReaderView(book: book, chapters: chapters),
         ),
@@ -579,7 +656,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
             ListTile(
               leading: const Icon(Icons.language_rounded),
               title: const Text('新增網路書籍'),
-              subtitle: const Text('保存書名、作者與目錄 URL'),
+              subtitle: const Text('輸入目錄 URL 自動辨識書名與章節'),
               onTap: () => Navigator.pop(context, BookSourceType.web),
             ),
             const SizedBox(height: 8),

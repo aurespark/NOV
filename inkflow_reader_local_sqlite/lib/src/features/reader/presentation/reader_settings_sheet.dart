@@ -205,67 +205,71 @@ class ReaderSettingsSheet extends ConsumerWidget {
         ],
       ),
     );
-    return Container(
-      height: MediaQuery.sizeOf(context).height * .72,
-      padding: EdgeInsets.fromLTRB(
-        16,
-        12,
-        16,
-        14 + MediaQuery.paddingOf(context).bottom,
-      ),
-      decoration: const BoxDecoration(
-        color: Color(0xfffbf8f1),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: Column(
-        children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.black12,
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
+    // 將底層彈窗容器由 Container(decoration) 改為 Material，消除斷言錯誤
+    return Material(
+      color: const Color(0xfffbf8f1),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * .72,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            12,
+            16,
+            14 + MediaQuery.paddingOf(context).bottom,
           ),
-          const SizedBox(height: 14),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, box) {
-                if (box.maxWidth < 600) {
-                  return DefaultTabController(
-                    length: 2,
-                    child: Column(
-                      children: [
-                        const TabBar(
-                          tabs: [
-                            Tab(text: '章節'),
-                            Tab(text: '閱讀設定'),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    if (box.maxWidth < 600) {
+                      return DefaultTabController(
+                        length: 2,
+                        child: Column(
+                          children: [
+                            const TabBar(
+                              tabs: [
+                                Tab(text: '章節'),
+                                Tab(text: '閱讀設定'),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: TabBarView(
+                                children: [chapterPanel, settingsPanel],
+                              ),
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          child: TabBarView(
-                            children: [chapterPanel, settingsPanel],
-                          ),
-                        ),
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(width: 150, child: chapterPanel),
+                        const VerticalDivider(width: 24),
+                        Expanded(child: settingsPanel),
                       ],
-                    ),
-                  );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(width: 150, child: chapterPanel),
-                    const VerticalDivider(width: 24),
-                    Expanded(child: settingsPanel),
-                  ],
-                );
-              },
-            ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

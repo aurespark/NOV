@@ -17,6 +17,8 @@ dependencies:
   crypto: ^3.0.7
   charset_converter: ^2.3.0
   sqflite: ^2.4.3
+  html: ^0.15.7
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

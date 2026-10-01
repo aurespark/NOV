@@ -2,11 +2,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-
 import '../../../core/services/inkflow_scheme_router.dart';
 import '../../../core/services/library_database.dart';
 import '../../library/book.dart';
 import '../domain/reader_models.dart';
+import 'reader_view.dart';
 
 class WebReadView extends ConsumerStatefulWidget {
   final Book book;

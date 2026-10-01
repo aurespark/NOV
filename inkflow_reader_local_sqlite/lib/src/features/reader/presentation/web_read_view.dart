@@ -1,469 +1,532 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:inkflow_reader/src/features/reader/domain/reader_models.dart';
-import 'reader_view.dart';
 
-class WebReadView extends StatefulWidget {
-  final dynamic book;
-  final List<ChapterMarker>? chapters;
-  final String? initialUrl;
+import '../../../core/services/inkflow_scheme_router.dart';
+import '../../../core/services/library_database.dart';
+import '../../library/book.dart';
+import '../domain/reader_models.dart';
+
+class WebReadView extends ConsumerStatefulWidget {
+  final Book book;
+  final String initialUrl;
 
   const WebReadView({
-    super.key,
     required this.book,
-    this.chapters,
-    this.initialUrl,
+    required this.initialUrl,
+    super.key,
   });
 
   @override
-  State<WebReadView> createState() => _WebReadViewState();
+  ConsumerState<WebReadView> createState() => _WebReadViewState();
 }
 
-class _WebReadViewState extends State<WebReadView> {
+class _WebReadViewState extends ConsumerState<WebReadView> {
   late final WebViewController _controller;
+  var _progress = 0.0;
+  String _pageTitle = '';
+  bool _canExtractText = false;
+  String? _extractedContent;
+  String? _extractedChapterTitle;
 
-  // 載入進度狀態
-  bool _isLoading = true;
-  int _loadingProgress = 0;
-  String _currentUrl = '';
-
-  // 章節目錄與定位
-  List<ChapterMarker> _chapters = [];
-  int? _currentChapterIndex;
-  String? _currentChapterTitle;
-
-  // 防重複抓取旗標
-  String _lastExtractedUrl = '';
+  // 章節導航狀態
+  List<Map<String, dynamic>> _savedChapters = [];
+  int _currentChapterIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _currentUrl = widget.initialUrl ?? _extractBookUrl(widget.book);
-    debugPrint('[WebReadView] 🚀 啟動 WebReadView, 起始網址: $_currentUrl');
-
-    _initWebViewController();
-    _loadLocalChapters();
-  }
-
-  String _extractBookUrl(dynamic book) {
-    try {
-      return (book.url ?? book.sourceUrl ?? book.link ?? '').toString();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  String _getBookId() {
-    try {
-      return (widget.book.id ?? widget.book.bookId ?? '').toString();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  String _getBookTitle() {
-    try {
-      return (widget.book.title ?? widget.book.name ?? '線上小說').toString();
-    } catch (_) {
-      return '線上小說';
-    }
-  }
-
-  /// 1. 初始化 WebView 控制器
-  void _initWebViewController() {
-    debugPrint('[WebReadView] ⚙️ 設定 WebViewController 監聽器...');
+    _pageTitle = widget.book.title;
+    _loadChaptersFromDb();
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onProgress: (int progress) {
-            _loadingProgress = progress;
-            if (progress % 50 == 0 || progress == 100) {
-              debugPrint('[WebReadView] ⏳ 載入進度: $progress%');
-            }
-          },
-          onPageStarted: (String url) {
-            debugPrint('[WebReadView] 🌐 開始載入: $url');
-            if (mounted) {
-              setState(() {
-                _isLoading = true;
-                _currentUrl = url;
-              });
-            }
-          },
-          onPageFinished: (String url) async {
+          onProgress: (p) => setState(() => _progress = p / 100.0),
+          onPageFinished: (url) async {
+            setState(() => _progress = 1.0);
             debugPrint('[WebReadView] 📄 網頁載入完成: $url');
-            if (mounted) {
-              setState(() {
-                _isLoading = false;
-                _currentUrl = url;
-              });
-            }
-
-            // 1. 比對當前是否為已知章節
-            final matched = _matchCurrentUrlToChapter(url);
-
-            // 2. 若是目錄頁且尚未抓取過此網址，執行爬蟲
-            if (!matched && _isCatalogUrl(url) && _lastExtractedUrl != url) {
-              _lastExtractedUrl = url;
-              await _extractCatalogFromWeb(url);
-            }
+            _detectContentAndTitle();
+            _matchCurrentChapter(url);
           },
-          onWebResourceError: (WebResourceError error) {
-            // 忽略廣告等被阻擋的資源錯誤
-            if (error.errorCode != -6) {
-              debugPrint('[WebReadView] ⚠️ 資源錯誤: [${error.errorCode}] ${error.description}');
+          onNavigationRequest: (request) {
+            if (InkflowSchemeRouter.isInternalScheme(request.url)) {
+              final action = InkflowSchemeRouter.parse(request.url);
+              debugPrint('[WebReadView] ⚡ 攔截內部自訂協定: $action');
+              return NavigationDecision.prevent;
             }
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            debugPrint('[WebReadView] 🔗 請求導向: ${request.url}');
             return NavigationDecision.navigate;
           },
         ),
-      );
+      )
+      ..loadRequest(Uri.parse(widget.initialUrl));
+  }
 
-    if (_currentUrl.isNotEmpty) {
-      _controller.loadRequest(Uri.parse(_currentUrl));
+  /// 從資料庫讀取已儲存的所有章節資料
+  Future<void> _loadChaptersFromDb() async {
+    final db = await LibraryDatabase.instance.database;
+    final list = await db.query(
+      'chapters',
+      where: 'bookId = ?',
+      whereArgs: [widget.book.id],
+      orderBy: 'chapterIndex ASC',
+    );
+    if (mounted) {
+      setState(() {
+        _savedChapters = list;
+      });
+      debugPrint('[WebReadView] 📚 已從本地載入 ${_savedChapters.length} 個已存章節');
     }
   }
 
-  bool _isCatalogUrl(String url) {
-    return url.contains('/n/') ||
-        url.contains('/info/') ||
-        url.contains('/book/') ||
-        url.contains('catalog');
+  /// 根據當前 WebView 網址比對出是第幾章
+  void _matchCurrentChapter(String url) {
+    if (_savedChapters.isEmpty) return;
+    for (var i = 0; i < _savedChapters.length; i++) {
+      final chUrl = _savedChapters[i]['chapterUrl'] as String?;
+      if (chUrl != null && url.contains(chUrl.split('?').first)) {
+        setState(() => _currentChapterIndex = i);
+        debugPrint('[WebReadView] 📍 目前定位於第 $i 章: ${_savedChapters[i]['title']}');
+        break;
+      }
+    }
   }
 
-  /// 2. 從本地 SQLite 資料庫讀取已儲存的章節目錄
-  Future<void> _loadLocalChapters() async {
-    final bookId = _getBookId();
-    debugPrint('[DB] 🔍 開始從本地資料庫檢查現存目錄 (bookId: $bookId)...');
-
+  /// 偵測頁面正文
+  Future<void> _detectContentAndTitle() async {
     try {
-      // 若外部已直接傳入章節列表，優先使用
-      if (widget.chapters != null && widget.chapters!.isNotEmpty) {
-        _chapters = List<ChapterMarker>.from(widget.chapters!);
+      final realTitle = await _controller.getTitle();
+      if (realTitle != null && realTitle.isNotEmpty) {
+        _syncRealTitle(realTitle);
+      }
+
+      const jsDetect = '''
+        (function() {
+          const selectors = [
+            '#chaptercontent', '#content', '.read-content',
+            '.novel-content', '#htmlContent', '.content',
+            'article', '.post-content'
+          ];
+          let bodyText = '';
+          for (const s of selectors) {
+            const el = document.querySelector(s);
+            if (el && el.innerText.trim().length >= 100) {
+              bodyText = el.innerText.trim();
+              break;
+            }
+          }
+          let heading = document.querySelector('h1, h2, .title, .chapter-title')?.innerText || '';
+          return JSON.stringify({ hasContent: bodyText.length >= 100, text: bodyText, title: heading });
+        })();
+      ''';
+
+      final res = await _controller.runJavaScriptReturningResult(jsDetect);
+      final json = _safeJsonDecode(res.toString());
+      if (json is Map && json['hasContent'] == true) {
+        final text = json['text'] as String?;
+        debugPrint('[WebReadView] ✨ 偵測到章節正文！標題: "${json['title']}", 字數: ${text?.length}');
+        setState(() {
+          _canExtractText = true;
+          _extractedContent = text;
+          _extractedChapterTitle = json['title'] as String?;
+        });
       } else {
-        // 從 SQLite 資料庫讀取（依你的資料表結構調整）
-        final dbPath = await getDatabasesPath();
-        final path = '$dbPath/inkflow_reader.db';
-        final db = await openDatabase(path);
-
-        final List<Map<String, dynamic>> maps = await db.query(
-          'chapters',
-          where: 'book_id = ?',
-          whereArgs: [bookId],
-          orderBy: 'chapter_index ASC',
-        );
-
-        if (maps.isNotEmpty) {
-          _chapters = maps.map((row) {
-            return ChapterMarker(
-              title: (row['title'] ?? '').toString(),
-              // 若 ChapterMarker 有 url 欄位：
-              // url: (row['url'] ?? '').toString(),
-            );
-          }).toList();
-        }
+        setState(() => _canExtractText = false);
       }
+    } catch (_) {}
+  }
 
-      if (mounted) {
-        setState(() {});
-        debugPrint('[WebReadView] 📚 已從本地載入 ${_chapters.length} 個已存章節');
-        if (_currentUrl.isNotEmpty) {
-          _matchCurrentUrlToChapter(_currentUrl);
-        }
+  void _syncRealTitle(String title) {
+    if (widget.book.title.startsWith('[') || widget.book.title == '線上小說') {
+      final cleanTitle = title.split(RegExp(r'[_|\-–—]')).first.trim();
+      if (cleanTitle.isNotEmpty && cleanTitle != widget.book.title) {
+        setState(() => _pageTitle = cleanTitle);
+        final updated = widget.book.copyWith(title: cleanTitle);
+        LibraryDatabase.instance.updateBook(updated);
       }
-    } catch (e) {
-      debugPrint('[DB] ⚠️ 本地目錄讀取略過或查無快取: $e');
     }
   }
 
-  /// 3. 執行 JavaScript 抓取 ul.chapter-list 目錄
-  Future<void> _extractCatalogFromWeb(String url) async {
-    debugPrint('[WebCatalogExtract] 🚀 開始抓取目錄，當前網址: $url');
+  /// 一鍵抓取目前 WebView 頁面的章節目錄
+  Future<void> _extractCatalogFromCurrentPage() async {
+    final currentUrl = await _controller.currentUrl();
+    debugPrint('[WebCatalogExtract] 🚀 開始抓取目錄，當前網址: $currentUrl');
 
-    const jsCode = r'''
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('正在鎖定目錄容器並提取章節...')),
+    );
+
+    const jsExtractCatalog = '''
       (function() {
-        // 尋找目標目錄容器
-        const selectors = [
-          'ul.chapter-list',
-          'div.chapter-list',
-          '.chapter-list',
-          '#chapter-list',
-          'ul.list-group'
+        const containerSelectors = [
+          'ul.chapter-list', '.chapter-list', '#chapter-list',
+          '.dir-list', '#list-chapterAll', '#list', '.volume', '#chapters'
         ];
-        
-        let container = null;
-        let matchedSelector = '';
-        
-        for (const sel of selectors) {
+
+        let targetLinks = [];
+        let matchedContainer = '全網頁 a 標籤';
+
+        for (const sel of containerSelectors) {
           const el = document.querySelector(sel);
-          if (el && el.querySelectorAll('a').length > 0) {
-            container = el;
-            matchedSelector = sel;
-            break;
+          if (el) {
+            const links = Array.from(el.querySelectorAll('a'));
+            if (links.length >= 5) {
+              targetLinks = links;
+              matchedContainer = sel + ' (' + links.length + ' 個連結)';
+              break;
+            }
           }
         }
 
-        if (!container) {
-          // 若無容器，嘗試抓取所有可能的章節 a 標籤
-          const allLinks = Array.from(document.querySelectorAll("a[href*='chapter'], a[href*='/n/']"));
-          if (allLinks.length > 5) {
-            container = document.body;
-            matchedSelector = 'body a[href]';
-          }
+        if (targetLinks.length === 0) {
+          targetLinks = Array.from(document.querySelectorAll('a'));
         }
 
-        if (!container) {
-          return JSON.stringify({ success: false, selector: 'none', count: 0, chapters: [] });
-        }
+        const chapterRegex = /(?:第\\s*[0-9一二三四五六七八九十百千零]+\\s*[章回節卷頁页話话集部篇]|\\b\\d{1,4}[\\.\\、\\-\\s]+|Chapter\\s*\\d+|序章|楔子|尾聲|番外|後記|后记|大結局)/i;
+        const noiseRegex = /^(首頁|主頁|書架|登入|註冊|排行|版權|下一頁|上一頁|返回|最新章節|目錄|加入書籤|推薦|回報)/;
 
-        const links = container.querySelectorAll('a');
-        const list = [];
-        let idx = 0;
+        const chapters = [];
+        const seen = new Set();
 
-        links.forEach((a) => {
+        for (let i = 0; i < targetLinks.length; i++) {
+          const a = targetLinks[i];
           const text = (a.innerText || a.textContent || '').trim();
           const href = a.href;
-          if (text && href && !href.startsWith('javascript:')) {
-            list.push({
-              index: idx++,
-              title: text,
-              url: href
-            });
+
+          if (!href || text.length < 1 || noiseRegex.test(text)) continue;
+
+          const inContainer = matchedContainer.includes('(');
+          const isMatchRegex = chapterRegex.test(text);
+
+          if ((inContainer || isMatchRegex) && !seen.has(href)) {
+            seen.add(href);
+            chapters.push({ title: text, url: href });
           }
-        });
+        }
 
         return JSON.stringify({
-          success: true,
-          selector: matchedSelector,
-          count: list.length,
-          chapters: list
+          container: matchedContainer,
+          totalPageLinks: document.querySelectorAll('a').length,
+          matchedCount: chapters.length,
+          chapters: chapters
         });
       })();
     ''';
 
     try {
-      final rawResult = await _controller.runJavaScriptReturningResult(jsCode);
-      
-      String jsonStr = rawResult.toString();
-      // 清除可能包在外層的引號與跳脫字元
-      if (jsonStr.startsWith('"') && jsonStr.endsWith('"')) {
-        jsonStr = jsonDecode(jsonStr);
+      final rawResult = await _controller.runJavaScriptReturningResult(jsExtractCatalog);
+      final dynamic decoded = _safeJsonDecode(rawResult.toString());
+
+      if (decoded is! Map) {
+        throw FormatException('解析失敗: $rawResult');
       }
 
-      final data = jsonDecode(jsonStr) as Map<String, dynamic>;
-      final bool success = data['success'] == true;
-      final String selector = data['selector'] ?? '';
-      final int count = data['count'] ?? 0;
-      final List rawChapters = data['chapters'] ?? [];
+      final list = (decoded['chapters'] as List?) ?? [];
+      final container = decoded['container'] ?? '';
+      debugPrint('[WebCatalogExtract] 📊 命中容器: $container, 抓取到 ${list.length} 個章節');
 
-      if (success && count > 0) {
-        debugPrint('[WebCatalogExtract] 📊 命中容器: $selector ($count 個連結), 抓取到 $count 個章節');
-
-        // 轉換為 ChapterMarker 列表
-        final List<ChapterMarker> newChapterMarkers = rawChapters.map((item) {
-          return ChapterMarker(
-            title: (item['title'] ?? '').toString(),
-            // 若你的 ChapterMarker 包含 url 等參數，可在此賦值：
-            // url: (item['url'] ?? '').toString(),
-          );
-        }).toList();
-
-        // 批次寫入 SQLite
-        await _saveChaptersToDatabase(rawChapters);
-
-        if (mounted) {
-          setState(() {
-            _chapters = newChapterMarkers;
-          });
-          debugPrint('[WebReadView] 📚 已從本地載入 ${_chapters.length} 個已存章節');
-          _matchCurrentUrlToChapter(_currentUrl);
-        }
-      } else {
-        debugPrint('[WebCatalogExtract] ⚠️ 未能抓取到目錄容器或連結數為 0');
-      }
-    } catch (e) {
-      debugPrint('[WebCatalogExtract] ❌ 目錄解析執行失敗: $e');
-    }
-  }
-
-  /// 4. 批次寫入 SQLite 資料庫
-  Future<void> _saveChaptersToDatabase(List rawChapters) async {
-    final bookId = _getBookId();
-    debugPrint('[DB] 正在批次寫入/更新線上章節目錄: 共 ${rawChapters.length} 章');
-
-    try {
-      final dbPath = await getDatabasesPath();
-      final path = '$dbPath/inkflow_reader.db';
-      final db = await openDatabase(path);
-
-      // 建立 chapters 資料表（若不存在）
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS chapters (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          book_id TEXT,
-          chapter_index INTEGER,
-          title TEXT,
-          url TEXT,
-          UNIQUE(book_id, chapter_index) ON CONFLICT REPLACE
-        )
-      ''');
-
-      // 使用 Batch 進行高效批次寫入
-      final batch = db.batch();
-      for (final item in rawChapters) {
-        batch.insert(
-          'chapters',
-          {
-            'book_id': bookId,
-            'chapter_index': item['index'],
-            'title': item['title'],
-            'url': item['url'],
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
+      if (list.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未在目前畫面找到章節。請點進小說的「目錄」分頁後再試！')),
         );
+        return;
       }
-      await batch.commit(noResult: true);
 
-      debugPrint('[DB] 線上章節目錄寫入完畢！');
-    } catch (e) {
-      debugPrint('[DB] ⚠️ 寫入 SQLite 異常: $e');
-    }
-  }
+      final chapterMaps = <Map<String, dynamic>>[];
+      final markers = <ChapterMarker>[];
 
-  /// 5. 根據當前網址比對章節
-  bool _matchCurrentUrlToChapter(String url) {
-    if (_chapters.isEmpty) return false;
+      for (var i = 0; i < list.length; i++) {
+        final item = list[i] as Map;
+        final title = item['title'] as String;
+        final url = item['url'] as String;
 
-    for (int i = 0; i < _chapters.length; i++) {
-      final dynamic ch = _chapters[i];
-      String chUrl = '';
-      try {
-        chUrl = (ch.url ?? ch.link ?? ch.sourceUrl ?? '').toString();
-      } catch (_) {}
-
-      if (chUrl.isNotEmpty && (url == chUrl || url.contains(chUrl) || chUrl.contains(url))) {
-        String title = '第 ${i + 1} 章';
-        try {
-          title = (ch.title ?? ch.name ?? title).toString();
-        } catch (_) {}
-
-        debugPrint('[WebReadView] 📍 目前定位於第 ${i + 1} 章: $title');
-
-        if (mounted) {
-          setState(() {
-            _currentChapterIndex = i;
-            _currentChapterTitle = title;
-          });
-        }
-        return true;
+        chapterMaps.add({
+          'bookId': widget.book.id,
+          'chapterIndex': i,
+          'title': title,
+          'characterOffset': 0,
+          'chapterUrl': url,
+          'isSaved': 0,
+        });
+        markers.add(ChapterMarker(title, 0));
       }
-    }
-    return false;
-  }
 
-  /// 6. 點擊進入原生閱讀器視窗
-  void _navigateToReader() {
-    if (_chapters.isEmpty) {
+      await LibraryDatabase.instance.insertOrUpdateCatalog(widget.book.id, chapterMaps);
+      await LibraryDatabase.instance.replaceChapters(widget.book.id, markers);
+      await _loadChaptersFromDb();
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('章節目錄載入中，請稍候...')),
+        SnackBar(
+          content: Text('🎉 成功提取並儲存 ${list.length} 個章節目錄！'),
+          backgroundColor: const Color(0xff536c63),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[WebCatalogExtract] ❌ 抓取失敗: $e');
+    }
+  }
+
+  /// 跳轉至指定序號的章節
+  void _goToChapter(int targetIndex) {
+    if (targetIndex < 0 || targetIndex >= _savedChapters.length) return;
+    final item = _savedChapters[targetIndex];
+    final url = item['chapterUrl'] as String?;
+    if (url != null && url.isNotEmpty) {
+      debugPrint('[WebReadView] ⚡ 跳轉至第 $targetIndex 章: ${item['title']} ($url)');
+      setState(() => _currentChapterIndex = targetIndex);
+      _controller.loadRequest(Uri.parse(url));
+    }
+  }
+
+  /// 彈出目錄列表抽屜
+  Future<void> _showCatalogSheet() async {
+    if (_savedChapters.isEmpty) {
+      await _loadChaptersFromDb();
+    }
+
+    if (_savedChapters.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('尚未儲存目錄，請先點擊右上角「抓取目錄」按鈕！')),
       );
       return;
     }
 
-    final targetIndex = _currentChapterIndex ?? 0;
-    debugPrint('[Navigation] 🚀 使用者點擊進入原生閱讀視窗！');
-    debugPrint('[Navigation] 📌 書籍: ${_getBookTitle()}');
-    debugPrint('[Navigation] 📌 目錄總數: ${_chapters.length} 章');
-    debugPrint('[Navigation] 📌 目標章節: 第 ${targetIndex + 1} 章');
-
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => ReaderView(
-          book: widget.book,
-          chapters: _chapters, // 👈 傳入 List<ChapterMarker>
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollController) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Text(
+                    '章節目錄 (共 ${_savedChapters.length} 章)',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '目前：第 ${_currentChapterIndex + 1} 章',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollController,
+                itemCount: _savedChapters.length,
+                itemBuilder: (context, index) {
+                  final ch = _savedChapters[index];
+                  final isCurrent = index == _currentChapterIndex;
+                  return ListTile(
+                    dense: true,
+                    selected: isCurrent,
+                    selectedTileColor: const Color(0xffeadfd3),
+                    title: Text(ch['title'] as String? ?? '第 $index 章'),
+                    trailing: isCurrent ? const Icon(Icons.check, color: Color(0xff755842)) : null,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _goToChapter(index);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
-    ).then((_) {
-      debugPrint('[Navigation] 🔙 從原生閱讀器返回 WebView 介面');
-    });
+    );
+  }
+
+  /// 彈出沉浸式純文字排版閱讀畫面（支援切換章節！）
+  void _openNativeReaderModal() {
+    if (_extractedContent == null || _extractedContent!.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: const Color(0xfffbf7ef),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) => Scaffold(
+          backgroundColor: const Color(0xfffbf7ef),
+          appBar: AppBar(
+            backgroundColor: const Color(0xfffbf7ef),
+            elevation: 0,
+            title: Text(
+              _extractedChapterTitle ?? '第 ${_currentChapterIndex + 1} 章',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            actions: [
+              IconButton(
+                tooltip: '返回網頁模式',
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ],
+          ),
+          body: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: SingleChildScrollView(
+              child: Text(
+                _extractedContent!,
+                style: const TextStyle(
+                  fontSize: 18,
+                  height: 1.8,
+                  color: Color(0xff2d251e),
+                  fontFamily: 'serif',
+                ),
+              ),
+            ),
+          ),
+          bottomNavigationBar: BottomAppBar(
+            color: const Color(0xfff2ebd9),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                TextButton.icon(
+                  onPressed: _currentChapterIndex > 0
+                      ? () {
+                          Navigator.pop(ctx);
+                          _goToChapter(_currentChapterIndex - 1);
+                        }
+                      : null,
+                  icon: const Icon(Icons.arrow_back_ios_rounded, size: 14),
+                  label: const Text('上一章'),
+                ),
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _showCatalogSheet();
+                  },
+                  icon: const Icon(Icons.menu_book_rounded),
+                  label: Text('目錄 (${_savedChapters.length})'),
+                ),
+                TextButton.icon(
+                  onPressed: _currentChapterIndex < _savedChapters.length - 1
+                      ? () {
+                          Navigator.pop(ctx);
+                          _goToChapter(_currentChapterIndex + 1);
+                        }
+                      : null,
+                  icon: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                  label: const Text('下一章'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  dynamic _safeJsonDecode(String raw) {
+    var text = raw.trim();
+    var decoded = jsonDecode(text);
+    if (decoded is String) {
+      decoded = jsonDecode(decoded);
+    }
+    return decoded;
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool canRead = _chapters.isNotEmpty;
+    final hasPrev = _currentChapterIndex > 0 && _savedChapters.isNotEmpty;
+    final hasNext = _currentChapterIndex < _savedChapters.length - 1 && _savedChapters.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_getBookTitle()),
+        title: Text(
+          _pageTitle,
+          style: const TextStyle(fontSize: 16),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            tooltip: '查看目錄',
+            icon: const Icon(Icons.menu_book_rounded),
+            onPressed: _showCatalogSheet,
+          ),
+          IconButton(
+            tooltip: '抓取目前頁面目錄',
+            icon: const Icon(Icons.playlist_add_check_rounded),
+            onPressed: _extractCatalogFromCurrentPage,
+          ),
+          IconButton(
             tooltip: '重新整理',
+            icon: const Icon(Icons.refresh_rounded),
             onPressed: () => _controller.reload(),
           ),
         ],
+        bottom: _progress < 1.0
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(2),
+                child: LinearProgressIndicator(value: _progress),
+              )
+            : null,
       ),
       body: Stack(
         children: [
-          // 底層：網頁瀏覽器
           WebViewWidget(controller: _controller),
-
-          // 頂部進度條
-          if (_isLoading)
+          if (_canExtractText)
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: LinearProgressIndicator(
-                value: _loadingProgress > 0 ? _loadingProgress / 100.0 : null,
+              right: 16,
+              bottom: 16,
+              child: FloatingActionButton.extended(
+                onPressed: _openNativeReaderModal,
+                backgroundColor: const Color(0xff755842),
+                foregroundColor: Colors.white,
+                icon: const Icon(Icons.chrome_reader_mode_rounded),
+                label: const Text('轉純文字閱讀'),
               ),
             ),
-
-          // 方案二：懸浮進入閱讀按鈕
-          Positioned(
-            left: 20,
-            right: 20,
-            bottom: 30,
-            child: AnimatedSlide(
-              duration: const Duration(milliseconds: 300),
-              offset: canRead ? Offset.zero : const Offset(0, 2),
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 300),
-                opacity: canRead ? 1.0 : 0.0,
-                child: canRead
-                    ? ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
-                          elevation: 6,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                        ),
-                        icon: const Icon(Icons.auto_stories),
-                        label: Text(
-                          _currentChapterTitle != null
-                              ? '進入閱讀：$_currentChapterTitle'
-                              : '進入閱讀（共 ${_chapters.length} 章）',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
-                        onPressed: _navigateToReader,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-            ),
-          ),
         ],
       ),
+      // 底部章節導航控制列
+      bottomNavigationBar: _savedChapters.isNotEmpty
+          ? BottomAppBar(
+              height: 56,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: hasPrev ? () => _goToChapter(_currentChapterIndex - 1) : null,
+                      icon: const Icon(Icons.arrow_back_ios_rounded, size: 14),
+                      label: const Text('上一章'),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: _showCatalogSheet,
+                    icon: const Icon(Icons.list_alt_rounded),
+                    label: Text('第 ${_currentChapterIndex + 1} / ${_savedChapters.length} 頁'),
+                  ),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: hasNext ? () => _goToChapter(_currentChapterIndex + 1) : null,
+                      icon: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                      label: const Text('下一章'),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : null,
     );
   }
 }

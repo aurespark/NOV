@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/library_database.dart';
+import '../../../core/services/online_chapter_service.dart';
 import '../../library/book.dart';
 import '../domain/pagination_engine.dart';
 import '../domain/reader_models.dart';
@@ -12,11 +15,13 @@ class ReaderView extends ConsumerStatefulWidget {
   const ReaderView({
     required this.book,
     required this.chapters,
+    this.initialChapterIndex = 0,
     super.key,
   });
 
   final Book book;
   final List<ChapterMarker> chapters;
+  final int initialChapterIndex;
 
   @override
   ConsumerState<ReaderView> createState() => _ReaderViewState();
@@ -39,12 +44,109 @@ class _ReaderViewState extends ConsumerState<ReaderView>
   String? layoutKey;
   Book? latestBook;
 
+  // 當前章節索引
+  int _currentChapterIndex = 0;
+
   @override
   void initState() {
     super.initState();
-    latestBook = widget.book;
-    restoreOffset = widget.book.characterOffset;
+    _currentChapterIndex = widget.initialChapterIndex;
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// 內建輕量網路請求
+  static Future<String> _fetchHtml(String url) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set('User-Agent', 'Mozilla/5.0');
+      final response = await request.close();
+      return await response.transform(utf8.decoder).join();
+    } finally {
+      client.close();
+    }
+  }
+
+  /// 跨章換頁：切換至下一章
+  Future<void> _goToNextChapter() async {
+    if (_currentChapterIndex >= widget.chapters.length - 1) {
+      debugPrint('[ReaderNav] 🛑 邊界攔截: 已達全書最後一章 (第 ${_currentChapterIndex + 1}/${widget.chapters.length} 章)');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已到達全書最後一章')),
+        );
+      }
+      return;
+    }
+
+    final nextIndex = _currentChapterIndex + 1;
+    final nextChapter = widget.chapters[nextIndex];
+    debugPrint('[ReaderNav] ⏩ 觸發跨章跳轉: 第 ${_currentChapterIndex + 1} 章 ➡️ 第 ${nextIndex + 1} 章 (${nextChapter.title})');
+
+    setState(() => _currentChapterIndex = nextIndex);
+
+    // 取得章節網址
+    String targetUrl = '';
+    try {
+      targetUrl = ((nextChapter as dynamic).url ?? (nextChapter as dynamic).link ?? '').toString();
+    } catch (_) {}
+
+    final db = await LibraryDatabase.instance.database;
+    final service = OnlineChapterService(db: db);
+    final nextText = await service.getChapterText(
+      bookId: widget.book.id.toString(),
+      chapterIndex: nextIndex,
+      chapterUrl: targetUrl,
+      fetcher: _fetchHtml,
+    );
+
+    // 注入新正文與標題，原有排版引擎會自動重算分頁，版面 100% 保持原本的原汁原味
+    ref.read(bookTextProvider.notifier).set(nextText);
+    ref.read(bookTitleProvider.notifier).set('${widget.book.title} - ${nextChapter.title}');
+
+    if (pageController.hasClients) {
+      pageController.jumpToPage(0);
+    }
+  }
+
+  /// 跨章換頁：倒退回上一章
+  Future<void> _goToPrevChapter() async {
+    if (_currentChapterIndex <= 0) {
+      debugPrint('[ReaderNav] 🛑 邊界攔截: 已達全書第一章首頁，拒絕後退');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已是全書第一章')),
+        );
+      }
+      return;
+    }
+
+    final prevIndex = _currentChapterIndex - 1;
+    final prevChapter = widget.chapters[prevIndex];
+    debugPrint('[ReaderNav] ⏮️ 觸發跨章倒退: 第 ${_currentChapterIndex + 1} 章 ➡️ 第 ${prevIndex + 1} 章 (${prevChapter.title})');
+
+    setState(() => _currentChapterIndex = prevIndex);
+
+    String targetUrl = '';
+    try {
+      targetUrl = ((prevChapter as dynamic).url ?? (prevChapter as dynamic).link ?? '').toString();
+    } catch (_) {}
+
+    final db = await LibraryDatabase.instance.database;
+    final service = OnlineChapterService(db: db);
+    final prevText = await service.getChapterText(
+      bookId: widget.book.id.toString(),
+      chapterIndex: prevIndex,
+      chapterUrl: targetUrl,
+      fetcher: _fetchHtml,
+    );
+
+    ref.read(bookTextProvider.notifier).set(prevText);
+    ref.read(bookTitleProvider.notifier).set('${widget.book.title} - ${prevChapter.title}');
+
+    if (pageController.hasClients) {
+      pageController.jumpToPage(0);
+    }
   }
 
   @override
@@ -124,7 +226,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
       );
       if (!mounted || generation != paginationGeneration) return;
       if (batch.nextOffset <= offset) {
-        throw StateError('分頁引擎未前進');
+        throw StateError('分頁排版異常');
       }
       offset = batch.nextOffset;
       setState(() {
@@ -158,8 +260,10 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     });
   }
 
+  /// 點擊區域判定（精準加入末頁跨章判斷）
   void _tap(double x, bool enabled) {
     if (x >= .3 && x <= .7) {
+      // 點擊中間：開啟設定面板
       final currentOffset = pages.isEmpty
           ? 0
           : pages[page.clamp(0, pages.length - 1)].start;
@@ -173,16 +277,32 @@ class _ReaderViewState extends ConsumerState<ReaderView>
           onChapterSelected: _jumpToChapter,
         ),
       );
-    } else if (enabled && x < .3 && page > 0) {
-      pageController.previousPage(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-      );
-    } else if (enabled && x > .7 && page < pages.length - 1) {
-      pageController.nextPage(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-      );
+    } else if (enabled && x < .3) {
+      // 點擊左側 30%：上翻
+      if (page > 0) {
+        debugPrint('[ReaderNav] 📄 前往當前章上一頁: $page/${pages.length}');
+        pageController.previousPage(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        // 第一頁向左點擊：跨章倒退
+        debugPrint('[ReaderNav] ⏪ 處於章節第一頁，觸發切換上一章');
+        _goToPrevChapter();
+      }
+    } else if (enabled && x > .7) {
+      // 點擊右側 30%：下翻
+      if (page < pages.length - 1) {
+        debugPrint('[ReaderNav] 📄 前往當前章下一頁: ${page + 2}/${pages.length}');
+        pageController.nextPage(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        // 核心修復：最後一頁向右點擊，觸發跨章跳轉！
+        debugPrint('[ReaderNav] ⏩ 已達當前章最後一頁 (${page + 1}/${pages.length})，觸發切換下一章');
+        _goToNextChapter();
+      }
     }
   }
 
@@ -195,7 +315,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     pendingChapterOffset = chapter.offset;
     restoreOffset = chapter.offset;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('正在計算章節位置…')),
+      const SnackBar(content: Text('已跳至章節位置')),
     );
   }
 
@@ -288,9 +408,9 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                         Text(
                           paginationComplete
                               ? (pages.isEmpty
-                                    ? '0 / 0'
-                                    : '${page + 1} / ${pages.length}')
-                              : '${pages.isEmpty ? 0 : page + 1}・頁數計算中',
+                                  ? '0 / 0'
+                                  : '${page + 1} / ${pages.length}')
+                              : '${pages.isEmpty ? 0 : page + 1} 頁排版中',
                           style: TextStyle(
                             fontSize: 11,
                             color: settings.textColor.withValues(alpha: .48),
@@ -303,7 +423,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                     child: text.isEmpty
                         ? Center(
                             child: Text(
-                              '這本書沒有可顯示的文字',
+                              '書本內容為空',
                               style: TextStyle(
                                 color: settings.textColor.withValues(alpha: .6),
                               ),
@@ -317,7 +437,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                                 const CircularProgressIndicator(),
                                 const SizedBox(height: 14),
                                 Text(
-                                  '正在準備閱讀位置…',
+                                  '正在排版中...',
                                   style: TextStyle(
                                     color: settings.textColor.withValues(
                                       alpha: .65,

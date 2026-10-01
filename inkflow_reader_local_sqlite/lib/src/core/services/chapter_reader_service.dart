@@ -30,32 +30,68 @@ class ChapterContentResult {
 }
 
 /// 正文抽取與文字淨化器
+/// 增強版正文抽取與淨化器
 class ChapterContentExtractor {
-  /// 從 HTML 中提取正文並淨化
+  /// 主流小說網站常見的正文容器選擇器矩陣
+  static const List<String> commonContentSelectors = [
+    '#chaptercontent',
+    '#content',
+    '.read-content',
+    '.novel-content',
+    '#htmlContent',
+    '.content',
+    '.chapter-content',
+    '#txtContent',
+    '#BookText',
+    'article',
+    '.post-content',
+    '.entry-content',
+  ];
+
+  /// 廣告與水印排除特徵
+  static final RegExp _watermarkPattern = RegExp(
+    r'(?:天才一秒記住|請記住本站網址|閱讀最新章節請到|筆趣閣|小說狂人|czbooks|無彈窗|推薦本書|上一章|下一章|章節目錄|加入書籤)',
+    caseSensitive: false,
+  );
+
   static String extractText(String html, {String? selector}) {
     if (html.trim().isEmpty) return '';
 
     final document = html_parser.parse(html);
 
-    // 1. 移除不相干的雜訊元素
+    // 1. 移除腳本、樣式與不相干雜訊元素
     document
-        .querySelectorAll('script, style, iframe, noscript, header, footer, nav, aside, .ad, .advert')
+        .querySelectorAll(
+          'script, style, iframe, noscript, header, footer, nav, aside, .ad, .advert, .share, .link, .recommend',
+        )
         .forEach((e) => e.remove());
 
     dom.Element? targetElement;
 
-    // 2. 優先使用指定 CSS Selector
+    // 2. 優先使用指定的自訂選擇器
     if (selector != null && selector.isNotEmpty) {
       targetElement = document.querySelector(selector);
     }
 
-    // 3. 備援啟發式：尋找包含段落 <p> 最多且文字最豐富的容器
+    // 3. 遍歷常見小說正文選擇器矩陣
+    if (targetElement == null) {
+      for (final sel in commonContentSelectors) {
+        final el = document.querySelector(sel);
+        if (el != null && el.text.trim().length >= 80) {
+          targetElement = el;
+          break;
+        }
+      }
+    }
+
+    // 4. 備援啟發式：評估字元長度與段落密度加權
     if (targetElement == null) {
       int maxScore = 0;
       for (final el in document.querySelectorAll('div, article, section, main, td')) {
         final pCount = el.querySelectorAll('p').length;
         final textLength = el.text.trim().length;
-        final score = pCount * 50 + textLength;
+        // 段落數量加權 + 內文字數
+        final score = pCount * 60 + textLength;
 
         if (score > maxScore) {
           maxScore = score;
@@ -66,12 +102,12 @@ class ChapterContentExtractor {
 
     if (targetElement == null) return '';
 
-    // 4. 段落排版與格式整理
+    // 5. 段落淨化與排版重組
     return _cleanAndFormatElement(targetElement);
   }
 
   static String _cleanAndFormatElement(dom.Element element) {
-    // 將 <br> 替換為標準換行符號
+    // 將 <br> 替換為換行符號
     element.querySelectorAll('br').forEach((br) => br.replaceWith(dom.Text('\n')));
 
     final paragraphs = <String>[];
@@ -79,16 +115,16 @@ class ChapterContentExtractor {
 
     if (pTags.isNotEmpty) {
       for (final p in pTags) {
-        final text = _cleanLine(p.text);
-        if (text.isNotEmpty) {
-          paragraphs.add(text);
+        final line = _cleanLine(p.text);
+        if (line.isNotEmpty && !_watermarkPattern.hasMatch(line)) {
+          paragraphs.add('  $line'); // 補齊傳統縮排
         }
       }
     } else {
-      for (final line in element.text.split('\n')) {
-        final text = _cleanLine(line);
-        if (text.isNotEmpty) {
-          paragraphs.add(text);
+      for (final rawLine in element.text.split('\n')) {
+        final line = _cleanLine(rawLine);
+        if (line.isNotEmpty && !_watermarkPattern.hasMatch(line)) {
+          paragraphs.add('  $line');
         }
       }
     }
@@ -98,7 +134,7 @@ class ChapterContentExtractor {
 
   static String _cleanLine(String text) {
     return text
-        .replaceAll(RegExp(r'[\u00a0\u3000]'), ' ') // 清理全形空格與 nbsp
+        .replaceAll(RegExp(r'[\u00a0\u3000]'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
@@ -192,7 +228,7 @@ class ChapterReaderService {
 
         final cleanText = ChapterContentExtractor.extractText(htmlContent, selector: readSelector);
 
-        if (cleanText.trim().isNotEmpty) {
+        if (cleanText.trim().length >= 100) {
           await _saveChapter(bookId, chapterIndex, cleanText);
 
           return ChapterContentResult(

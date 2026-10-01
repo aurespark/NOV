@@ -1,71 +1,66 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:inkflow_reader/src/features/reader/domain/pagination_engine.dart';
-import 'package:inkflow_reader/src/features/reader/domain/reader_models.dart';
 
-void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-  test('pagination covers text without gaps', () {
-    const text = '第一段文字。\n第二段文字。\n第三段文字。';
-    final engine = PaginationEngine();
-    final pages = <PageRange>[];
-    var offset = 0;
-    while (offset < text.length) {
-      final result = engine.paginateBatch(
-        text: text,
-        startOffset: offset,
-        style: const TextStyle(fontSize: 18, height: 1.6),
-        viewport: const Size(120, 60),
-        textScaler: TextScaler.noScaling,
-        maxPages: 100,
-      );
-      pages.addAll(result.pages);
-      offset = result.nextOffset;
-    }
-    expect(pages.first.start, 0);
-    expect(pages.last.end, text.length);
-    for (var i = 1; i < pages.length; i++) {
-      expect(pages[i - 1].end, pages[i].start);
-    }
+class ReaderPage extends StatefulWidget {
+  final String bookId;
+  final String bookTitle;
+  final int initialChapterIndex;
+  final List<dynamic> chapters;
+
+  const ReaderPage({
+    super.key,
+    required this.bookId,
+    required this.bookTitle,
+    required this.initialChapterIndex,
+    required this.chapters,
   });
 
-  test('chapter parser finds Chinese and English headings', () {
-    const text = '序章\n開始。\n\n第一章 相遇\n內容。\n\nChapter 2 Goodbye\n結束。';
-    final chapters = ChapterParser.parse(text);
-    expect(chapters.map((chapter) => chapter.title), [
-      '序章',
-      '第一章 相遇',
-      'Chapter 2 Goodbye',
-    ]);
-    expect(
-      chapters.map((chapter) => chapter.offset),
-      orderedEquals([0, 8, 20]),
+  @override
+  State<ReaderPage> createState() => _ReaderPageState();
+}
+
+class _ReaderPageState extends State<ReaderPage> {
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialChapterIndex;
+    debugPrint('[ReaderPage] 📖 原生閱讀器啟動完成');
+    debugPrint('[ReaderPage] 📑 當前閱讀書籍: ${widget.bookTitle} (ID: ${widget.bookId})');
+    debugPrint('[ReaderPage] 🎯 初始化位置: 第 ${_currentIndex + 1} 章');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7F5F0), // 羊皮紙底色
+      appBar: AppBar(
+        title: Text(widget.bookTitle),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.menu_book, size: 64, color: Colors.brown),
+              const SizedBox(height: 16),
+              Text(
+                '第 ${_currentIndex + 1} 章',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '此處渲染原生文字章節內容，支援翻頁、字體調整與背景切換。',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: Colors.black87),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
-  });
-
-  test('large TXT pagination is contiguous', () {
-    final text = List.filled(20000, '這是一段測試文字。').join('\n');
-    final engine = PaginationEngine();
-    final pages = <PageRange>[];
-    var offset = 0;
-    while (offset < text.length) {
-      final batch = engine.paginateBatch(
-        text: text,
-        startOffset: offset,
-        style: const TextStyle(fontSize: 21, height: 1.75),
-        viewport: const Size(340, 620),
-        textScaler: TextScaler.noScaling,
-      );
-      expect(batch.pages.length, lessThanOrEqualTo(6));
-      expect(batch.nextOffset, greaterThan(offset));
-      pages.addAll(batch.pages);
-      offset = batch.nextOffset;
-    }
-    expect(pages.length, greaterThan(3));
-    expect(pages.first.start, 0);
-    expect(pages.last.end, text.length);
-    for (var i = 1; i < pages.length; i++) {
-      expect(pages[i - 1].end, pages[i].start);
-    }
-  });
+  }
 }

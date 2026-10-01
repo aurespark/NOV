@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
@@ -7,7 +8,6 @@ import '../../features/library/book.dart';
 import '../../features/reader/domain/reader_models.dart';
 import 'library_database.dart';
 
-/// 站點特定規則配置
 class SiteRule {
   final String domain;
   final String? catalogSelector;
@@ -22,7 +22,6 @@ class SiteRule {
   });
 }
 
-/// 解析結果封裝
 class CatalogResolveResult {
   final List<ChapterItem> chapters;
   final String usedStrategy;
@@ -39,20 +38,24 @@ class WebCatalogResolver {
   static final WebCatalogResolver instance = WebCatalogResolver._internal();
   WebCatalogResolver._internal();
 
-  /// 章節正則特徵（支援中英文常見章節格式）
+  /// 章節正則特徵（加入「頁/页/話/话/集/部/篇/後記」等豐富特徵）
   static final RegExp _chapterPattern = RegExp(
-    r'(?:第\s*[0-9一二三四五六七八九十百千零]+\s*[章回節卷]|Chapter\s*\d+|序章|楔子|尾聲|番外)',
+    r'(?:第\s*[0-9一二三四五六七八九十百千零]+\s*[章回節卷頁页話话集部篇]|\b\d{1,4}[\.、\-\s]+|Chapter\s*\d+|序章|楔子|尾聲|番外|後記|后记|大結局)',
     caseSensitive: false,
   );
 
-  /// 常見雜訊排除正則
   static final RegExp _noisePattern = RegExp(
     r'^(?:首頁|主頁|書架|加入書籤|目錄|推薦|留言|登入|註冊|排行|版權|下一頁|上一頁|返回)',
     caseSensitive: false,
   );
 
-  /// 內建常見小說站點規則庫
+  /// 內建常見小說站點規則庫（包含小說狂人 czbooks）
   final Map<String, SiteRule> _siteRules = {
+    'czbooks.net': const SiteRule(
+      domain: 'czbooks.net',
+      catalogSelector: '.chapter-list li a, .chapter-list a',
+      readSelector: '.content',
+    ),
     'qidian.com': const SiteRule(
       domain: 'qidian.com',
       catalogSelector: '.volume li a',
@@ -63,29 +66,69 @@ class WebCatalogResolver {
     ),
   };
 
-  void registerSiteRule(SiteRule rule) {
-    _siteRules[rule.domain] = rule;
-  }
+  /// 擬真瀏覽器請求標頭（繞過常見防爬蟲檢查）
+  static Map<String, String> _buildBrowserHeaders(Uri uri) => {
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept':
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': '${uri.scheme}://${uri.host}/',
+    'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+    'Upgrade-Insecure-Requests': '1',
+  };
 
-  /// 抓取遠端網頁、解析目錄，並直接批次同步至本地 SQLite
-  Future<List<ChapterItem>> fetchAndSyncCatalog(Book book) async {
-    if (book.catalogUrl == null || book.catalogUrl!.trim().isEmpty) {
-      throw ArgumentError('書籍目錄網址不能為空');
+  /// 自動從網址抓取書名、作者與章節目錄（支援詳細 Log 輸出）
+  Future<({String title, String author, String? coverUrl, List<ChapterItem> chapters, bool isAntiBotProtected})>
+      fetchBookInfoAndCatalog({
+    required String rawUrl,
+    String? bookId,
+    http.Client? client,
+  }) async {
+    final normalizedUrl = _normalizeUrl(rawUrl);
+    final uri = Uri.parse(normalizedUrl);
+    final httpClient = client ?? http.Client();
+
+    debugPrint('[WebCatalog] 🌐 發送小說連線請求: $normalizedUrl');
+    final stopwatch = Stopwatch()..start();
+
+    http.Response response;
+    try {
+      response = await httpClient.get(
+        uri,
+        headers: _buildBrowserHeaders(uri),
+      );
+    } catch (e) {
+      debugPrint('[WebCatalog] ❌ 網路連線例外: $e');
+      rethrow;
+    } finally {
+      stopwatch.stop();
     }
 
-    final normalizedUrl = _normalizeUrl(book.catalogUrl!);
-    final uri = Uri.parse(normalizedUrl);
+    debugPrint('[WebCatalog] 📡 伺服器回應狀態碼: ${response.statusCode} (耗時: ${stopwatch.elapsedMilliseconds}ms)');
 
-    final response = await http.get(
-      uri,
-      headers: {
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    );
+    // 遇到 Cloudflare 或 403/503 防爬蟲時
+    if (response.statusCode == 403 || response.statusCode == 503) {
+      debugPrint('[WebCatalog] ⚠️ 偵測到 Cloudflare 或防爬蟲保護 (HTTP ${response.statusCode})');
+      // 從網址提取預設書名，啟動容錯機制
+      final domain = uri.host;
+      final pathSlug = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '線上小說';
+      return (
+        title: '[$domain] $pathSlug',
+        author: '網路來源',
+        coverUrl: null,
+        chapters: <ChapterItem>[],
+        isAntiBotProtected: true, // 標記為防爬蟲保護
+      );
+    }
 
     if (response.statusCode != 200) {
-      throw Exception('無法載入目錄網頁，HTTP 狀態碼：${response.statusCode}');
+      throw Exception('無法連線至該小說網址 (HTTP ${response.statusCode})');
     }
 
     String htmlContent;
@@ -95,24 +138,53 @@ class WebCatalogResolver {
       htmlContent = response.body;
     }
 
-    final result = resolve(
-      bookId: book.id,
+    final doc = html_parser.parse(htmlContent);
+
+    // 1. 自動辨識書名
+    String? title = doc.querySelector('meta[property="og:novel:book_name"]')?.attributes['content'] ??
+        doc.querySelector('meta[property="og:title"]')?.attributes['content'] ??
+        doc.querySelector('.book-detail h1, h1')?.text.trim();
+
+    if (title == null || title.isEmpty) {
+      final rawTitle = doc.querySelector('title')?.text.trim() ?? '';
+      title = rawTitle.split(RegExp(r'[_|\-–—]')).first.trim();
+    }
+    if (title.isEmpty) title = '線上小說';
+
+    // 2. 自動辨識作者
+    String? author = doc.querySelector('meta[property="og:novel:author"]')?.attributes['content'] ??
+        doc.querySelector('meta[name="author"]')?.attributes['content'];
+
+    if (author == null || author.isEmpty) {
+      final authorMatch = RegExp(r'作\s*者[：:\s]+([^\s<，,\|\n]+)').firstMatch(htmlContent);
+      if (authorMatch != null) {
+        author = authorMatch.group(1)?.trim();
+      }
+    }
+    author ??= '未知作者';
+
+    // 3. 封面圖
+    final coverUrl = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+
+    // 4. 解析目錄章節
+    final targetBookId = bookId ?? DateTime.now().millisecondsSinceEpoch.toString();
+    final resolveResult = resolve(
+      bookId: targetBookId,
       rawUrl: normalizedUrl,
       htmlContent: htmlContent,
-      customSelector: null,
     );
 
-    if (result.chapters.isEmpty) {
-      throw Exception('未能從該網頁成功識別出任何章節');
-    }
+    debugPrint('[WebCatalog] ✅ 解析成功！書名:《$title》, 作者: $author, 目錄共 ${resolveResult.chapters.length} 章');
 
-    final chapterMapList = result.chapters.map((c) => c.toMap()).toList();
-    await LibraryDatabase.instance.insertOrUpdateCatalog(book.id, chapterMapList);
-
-    return result.chapters;
+    return (
+      title: title,
+      author: author,
+      coverUrl: coverUrl != null ? _resolveUrl(uri, coverUrl) : null,
+      chapters: resolveResult.chapters,
+      isAntiBotProtected: false,
+    );
   }
 
-  /// 執行 DOM 目錄解析核心邏輯
   CatalogResolveResult resolve({
     required String bookId,
     required String rawUrl,
@@ -127,6 +199,7 @@ class WebCatalogResolver {
     for (final entry in _siteRules.entries) {
       if (baseUri.host.contains(entry.key)) {
         matchedRule = entry.value;
+        debugPrint('[WebCatalog] 命中專屬站點規則: ${entry.key}');
         break;
       }
     }
@@ -284,77 +357,5 @@ class WebCatalogResolver {
       url = 'https://$url';
     }
     return url;
-  }
-
-  /// 自動從網址提取書籍元資料（書名、作者、封面）與目錄章節
-  Future<({String title, String author, String? coverUrl, List<ChapterItem> chapters})>
-      fetchBookInfoAndCatalog({
-    required String rawUrl,
-    String? bookId,
-  }) async {
-    final normalizedUrl = _normalizeUrl(rawUrl);
-    final uri = Uri.parse(normalizedUrl);
-
-    final response = await http.get(
-      uri,
-      headers: {
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('無法連線至該小說網址 (HTTP ${response.statusCode})');
-    }
-
-    String htmlContent;
-    try {
-      htmlContent = utf8.decode(response.bodyBytes);
-    } catch (_) {
-      htmlContent = response.body;
-    }
-
-    final doc = html_parser.parse(htmlContent);
-
-    // 1. 自動辨識書名（優先讀取 OpenGraph meta，再讀取 h1 / title）
-    String? title = doc.querySelector('meta[property="og:novel:book_name"]')?.attributes['content'] ??
-        doc.querySelector('meta[property="og:title"]')?.attributes['content'] ??
-        doc.querySelector('h1')?.text.trim();
-
-    if (title == null || title.isEmpty) {
-      final rawTitle = doc.querySelector('title')?.text.trim() ?? '';
-      title = rawTitle.split(RegExp(r'[_|\-–—]')).first.trim();
-    }
-    if (title.isEmpty) title = '線上小說';
-
-    // 2. 自動辨識作者
-    String? author = doc.querySelector('meta[property="og:novel:author"]')?.attributes['content'] ??
-        doc.querySelector('meta[name="author"]')?.attributes['content'];
-
-    if (author == null || author.isEmpty) {
-      final authorMatch = RegExp(r'作\s*者[：:\s]+([^\s<，,\|\n]+)').firstMatch(htmlContent);
-      if (authorMatch != null) {
-        author = authorMatch.group(1)?.trim();
-      }
-    }
-    author ??= '網路來源';
-
-    // 3. 封面圖
-    final coverUrl = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
-
-    // 4. 自動識別章節目錄
-    final targetBookId = bookId ?? DateTime.now().millisecondsSinceEpoch.toString();
-    final resolveResult = resolve(
-      bookId: targetBookId,
-      rawUrl: normalizedUrl,
-      htmlContent: htmlContent,
-    );
-
-    return (
-      title: title,
-      author: author,
-      coverUrl: coverUrl != null ? _resolveUrl(uri, coverUrl) : null,
-      chapters: resolveResult.chapters,
-    );
   }
 }

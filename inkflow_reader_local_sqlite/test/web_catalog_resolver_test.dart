@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:inkflow_reader/src/core/services/web_catalog_resolver.dart';
 
 void main() {
@@ -101,4 +103,74 @@ void main() {
       expect(result.chapters.isNotEmpty, true);
     });
   });
+
+  test('遇到 HTTP 403 防爬蟲時啟動容錯保底，安全回傳 Web 模式標記而不崩潰', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('Cloudflare 403 Forbidden', 403);
+      });
+
+      final result = await WebCatalogResolver.instance.fetchBookInfoAndCatalog(
+        rawUrl: 'https://czbooks.net/n/u9mbf',
+        client: mockClient,
+      );
+
+      expect(result.isAntiBotProtected, isTrue);
+      expect(result.title, contains('czbooks.net'));
+      expect(result.author, '網路來源');
+    });
+
+test('能夠識別 WAP 手機網站常見之「純數字.」或「數字、」章節格式', () {
+      const mockWapHtml = '''
+        <html>
+          <body>
+            <div class="dir-list">
+              <a href="1.html">1. 初次相遇</a>
+              <a href="2.html">2. 暗潮洶湧</a>
+              <a href="3.html">3. 真相大白</a>
+              <a href="4.html">4. 終局之戰</a>
+              <a href="5.html">5. 尾聲篇章</a>
+            </div>
+          </body>
+        </html>
+      ''';
+
+      final result = WebCatalogResolver.instance.resolve(
+        bookId: 'wap_book_01',
+        rawUrl: 'https://wap.po18.in/book/1/',
+        htmlContent: mockWapHtml,
+      );
+
+      expect(result.chapters.length, 5);
+      expect(result.chapters.first.title, '1. 初次相遇');
+      expect(result.chapters.last.title, '5. 尾聲篇章');
+    });
+
+test('能夠準確識別「第 N 頁」小說章節格式（以小說狂人 czbooks 為例）', () {
+      const mockCzbooksHtml = '''
+        <html>
+          <body>
+            <ul class="chapter-list">
+              <li><a href="1.html">第1頁</a></li>
+              <li><a href="2.html">第2頁</a></li>
+              <li><a href="3.html">第3頁</a></li>
+              <li><a href="280.html">第280頁</a></li>
+            </ul>
+            <div class="sidebar">
+              <a href="other.html">其他人也在看：第99章</a>
+            </div>
+          </body>
+        </html>
+      ''';
+
+      final result = WebCatalogResolver.instance.resolve(
+        bookId: 'czbooks_01',
+        rawUrl: 'https://czbooks.net/n/skg2jdampkp',
+        htmlContent: mockCzbooksHtml,
+      );
+
+      expect(result.chapters.length, 4);
+      expect(result.chapters.first.title, '第1頁');
+      expect(result.chapters.last.title, '第280頁');
+    });
+
 }

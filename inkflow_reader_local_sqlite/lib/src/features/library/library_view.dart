@@ -11,6 +11,7 @@ import '../../core/services/library_database.dart';
 import '../../core/services/web_catalog_resolver.dart';
 import '../reader/domain/reader_models.dart';
 import '../reader/presentation/reader_controller.dart';
+import '../reader/presentation/web_read_view.dart';
 import '../reader/presentation/reader_view.dart';
 import 'book.dart';
 
@@ -248,13 +249,13 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                       try {
                         final id = DateTime.now().microsecondsSinceEpoch.toString();
 
-                        // 1. 自動從網址抓取書名、作者與章節目錄
+                        // 1. 自動抓取書名、作者與目錄
                         final info = await WebCatalogResolver.instance.fetchBookInfoAndCatalog(
                           rawUrl: rawUrl,
                           bookId: id,
                         );
 
-                        // 2. 構建書籍主檔
+                        // 2. 構建書籍實體
                         final book = Book(
                           id: id,
                           title: info.title,
@@ -269,28 +270,33 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                           isFinished: false,
                         );
 
-                        // 3. 寫入書籍主檔與章節標記
+                        // 3. 寫入書籍主檔
                         final markers = [
                           for (final ch in info.chapters)
                             ChapterMarker(ch.title, ch.characterOffset),
                         ];
                         await LibraryDatabase.instance.insertBook(book, markers);
 
-                        // 4. 批次寫入線上詳細目錄
-                        final chapterMaps = info.chapters.map((c) => c.toMap()).toList();
-                        await LibraryDatabase.instance.insertOrUpdateCatalog(id, chapterMaps);
-
-                        // 5. 背景預加載第一章，提升開卷速度
-                        ChapterReaderService.instance.loadChapter(bookId: id, chapterIndex: 0);
+                        // 4. 批次寫入目錄 (若有成功解析出章節)
+                        if (info.chapters.isNotEmpty) {
+                          final chapterMaps = info.chapters.map((c) => c.toMap()).toList();
+                          await LibraryDatabase.instance.insertOrUpdateCatalog(id, chapterMaps);
+                          ChapterReaderService.instance.loadChapter(bookId: id, chapterIndex: 0);
+                        }
 
                         if (mounted) {
                           Navigator.pop(context);
                           setState(() => books.insert(0, book));
-                          _message('成功匯入《${info.title}》，共 ${info.chapters.length} 章！');
+
+                          if (info.isAntiBotProtected) {
+                            _message('已加入書架！該站具備防爬蟲保護，將自動啟用 Web 模式瀏覽。');
+                          } else {
+                            _message('成功匯入《${info.title}》，共 ${info.chapters.length} 章！');
+                          }
                         }
                       } catch (error) {
                         setDialogState(() => isResolving = false);
-                        _message('自動解析失敗：$error');
+                        _message('解析失敗：$error');
                       }
                     },
               child: const Text('開始匯入'),
@@ -304,23 +310,37 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
   Future<void> _open(Book book, {String? initialText}) async {
     setState(() => loading = true);
     try {
-      String text;
+      String text = '';
       var chapters = await LibraryDatabase.instance.loadChapters(book.id);
 
       if (book.sourceType == BookSourceType.web) {
-        // 線上小說：從 ChapterReaderService 載入正文
+        // 1. 嘗試讀取已快取或解析好的純文字正文
         final chapterResult = await ChapterReaderService.instance.loadChapter(
           bookId: book.id,
           chapterIndex: 0,
         );
+
         if (chapterResult.content != null && chapterResult.content!.isNotEmpty) {
           text = chapterResult.content!;
         } else {
-          _message('無法讀取《${book.title}》的線上內文');
-          return;
+          // 2. 關鍵保底：純文字未命中時，直接開啟 WebReadView 瀏覽原始網頁！
+          final targetUrl = chapterResult.chapterUrl ?? book.catalogUrl;
+          if (targetUrl != null && mounted) {
+            setState(() => loading = false);
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => WebReadView(
+                  book: book,
+                  initialUrl: targetUrl,
+                ),
+              ),
+            );
+            _loadBooks(); // 返回後更新書架
+            return;
+          }
         }
       } else {
-        // 本地 TXT
+        // 本地 TXT 流程保持不變
         final path = book.localPath;
         if (path == null || !await File(path).exists()) {
           _message('找不到《${book.title}》的本機 TXT 檔案');
@@ -342,7 +362,7 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
         }
       }
 
-      if (!mounted) return;
+      if (!mounted || text.isEmpty) return;
       ref.read(bookTextProvider.notifier).set(text);
       ref.read(bookTitleProvider.notifier).set(book.title);
       final updated = await Navigator.of(context).push<Book>(

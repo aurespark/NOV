@@ -5,18 +5,24 @@ class OnlineChapterService {
   final Database db;
   OnlineChapterService({required this.db});
 
-  // ponytail: 三引號 Raw String 杜絕單引號跳脫問題；正則提取 div.content 省去 heavy DOM 依賴
   static String extractText(String html) {
     if (html.isEmpty) return '';
     final match = RegExp(r"""<div[^>]*class=["']content["'][^>]*>([\s\S]*?)</div>""", caseSensitive: false)
         .firstMatch(html);
     final raw = match?.group(1) ?? html;
-    return raw
+    final cleaned = raw
         .replaceAll(RegExp(r"""<script[\s\S]*?</script>|<style[\s\S]*?</style>|<ins[\s\S]*?</ins>""", caseSensitive: false), '')
         .replaceAll(RegExp(r"""<br\s*/?>""", caseSensitive: false), '\n')
         .replaceAll(RegExp(r"""</p>""", caseSensitive: false), '\n\n')
         .replaceAll(RegExp(r"""<[^>]+>"""), '')
         .replaceAll('&nbsp;', ' ')
+        .trim();
+
+    // 每行去除 HTML 標籤帶來的縮排空白，小說排版更整齊
+    return cleaned
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n')
         .trim();
   }
 

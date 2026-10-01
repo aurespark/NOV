@@ -3,6 +3,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
+import 'dart:convert';
+import '../../core/services/online_chapter_service.dart';
 
 import '../../core/services/book_file_store.dart';
 import '../../core/services/chapter_reader_service.dart';
@@ -314,18 +316,48 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
       var chapters = await LibraryDatabase.instance.loadChapters(book.id);
 
       if (book.sourceType == BookSourceType.web) {
-        // 1. 嘗試讀取已快取或解析好的純文字正文
+        // 1. 嘗試讀取本地快取的章節內容
         final chapterResult = await ChapterReaderService.instance.loadChapter(
           bookId: book.id,
           chapterIndex: 0,
         );
 
         if (chapterResult.content != null && chapterResult.content!.isNotEmpty) {
+          debugPrint('[ContentFetch] ✅ 本地快取命中: 第 1 章 (${chapterResult.content!.length} 字)');
           text = chapterResult.content!;
         } else {
-          // 2. 關鍵保底：純文字未命中時，直接開啟 WebReadView 瀏覽原始網頁！
+          // 2. 本地無快取：自動發起線上請求抓取正文
           final targetUrl = chapterResult.chapterUrl ?? book.catalogUrl;
-          if (targetUrl != null && mounted) {
+          if (targetUrl != null) {
+            debugPrint('[ContentFetch] 🌐 本地無快取，開始線上抓取小說正文: $targetUrl');
+            try {
+              final client = HttpClient();
+              final request = await client.getUrl(Uri.parse(targetUrl));
+              request.headers.set('User-Agent', 'Mozilla/5.0');
+              final response = await request.close();
+              final rawHtml = await response.transform(utf8.decoder).join();
+              client.close();
+
+              final cleanText = OnlineChapterService.extractText(rawHtml);
+              if (cleanText.isNotEmpty) {
+                text = cleanText;
+                debugPrint('[ContentFetch] 💾 線上正文抓取成功 (長度: ${cleanText.length} 字)，寫入 SQLite 快取');
+                final db = await LibraryDatabase.instance.database;
+                await db.update(
+                  'chapters',
+                  {'content': cleanText},
+                  where: 'book_id = ? AND chapter_index = ?',
+                  whereArgs: [book.id, 0],
+                );
+              }
+            } catch (e) {
+              debugPrint('[ContentFetch] ⚠️ 線上抓取失敗: $e');
+            }
+          }
+
+          // 3. 防呆回退：若線上抓取完全失敗（例如網路斷線或被阻擋），才退回 WebReadView
+          if (text.isEmpty && targetUrl != null && mounted) {
+            debugPrint('[ContentFetch] ℹ️ 未能取得純文字，退回 WebReadView 瀏覽');
             setState(() => loading = false);
             await Navigator.of(context).push(
               MaterialPageRoute(
@@ -335,30 +367,9 @@ class _LibraryViewState extends ConsumerState<LibraryView> {
                 ),
               ),
             );
-            _loadBooks(); // 返回後更新書架
+            _loadBooks();
             return;
           }
-        }
-      } else {
-        // 本地 TXT 流程保持不變
-        final path = book.localPath;
-        if (path == null || !await File(path).exists()) {
-          _message('找不到《${book.title}》的本機 TXT 檔案');
-          return;
-        }
-        final encoding = TextEncoding.values.firstWhere(
-          (value) => value.name == book.textEncoding,
-          orElse: () => TextEncoding.auto,
-        );
-        text = initialText ??
-            (await EncodingService().decode(
-              await File(path).readAsBytes(),
-              encoding,
-            )).text;
-
-        if (chapters.isEmpty) {
-          chapters = ChapterParser.parse(text);
-          await LibraryDatabase.instance.replaceChapters(book.id, chapters);
         }
       }
 

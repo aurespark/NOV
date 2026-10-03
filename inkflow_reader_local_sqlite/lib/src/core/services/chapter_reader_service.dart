@@ -1,283 +1,295 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:html/dom.dart' as dom;
-import 'package:html/parser.dart' as html_parser;
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'library_database.dart';
+import 'package:sqflite/sqflite.dart';
 
-/// 閱讀模式分流列舉
+/// 閱讀模式列舉
 enum ReadingMode {
-  nativeText,      // 原生文字排版模式 (已快取或成功抽取)
-  webViewFallback, // WebView 網頁保底模式 (遇反爬蟲或複雜排版)
+  nativeText,
+  webView,
 }
 
-/// 章節讀取結果封裝
+/// 章節內容回傳結果
 class ChapterContentResult {
   final int chapterIndex;
   final String title;
-  final String? content;       // 純文字內文 (Native 模式使用)
-  final String? chapterUrl;    // 原網頁連結 (WebView 模式使用)
+  final String content;
+  final String chapterUrl;
   final ReadingMode mode;
   final bool isFromCache;
 
-  const ChapterContentResult({
+  ChapterContentResult({
     required this.chapterIndex,
     required this.title,
-    this.content,
-    this.chapterUrl,
+    required this.content,
+    required this.chapterUrl,
     required this.mode,
     required this.isFromCache,
   });
-}
 
-/// 正文抽取與文字淨化器
-/// 增強版正文抽取與淨化器
-class ChapterContentExtractor {
-  /// 主流小說網站常見的正文容器選擇器矩陣
-  static const List<String> commonContentSelectors = [
-    '#chaptercontent',
-    '#content',
-    '.read-content',
-    '.novel-content',
-    '#htmlContent',
-    '.content',
-    '.chapter-content',
-    '#txtContent',
-    '#BookText',
-    'article',
-    '.post-content',
-    '.entry-content',
-  ];
-
-  /// 廣告與水印排除特徵
-  static final RegExp _watermarkPattern = RegExp(
-    r'(?:天才一秒記住|請記住本站網址|閱讀最新章節請到|筆趣閣|小說狂人|czbooks|無彈窗|推薦本書|上一章|下一章|章節目錄|加入書籤)',
-    caseSensitive: false,
-  );
-
-  static String extractText(String html, {String? selector}) {
-    if (html.trim().isEmpty) return '';
-
-    final document = html_parser.parse(html);
-
-    // 1. 移除腳本、樣式與不相干雜訊元素
-    document
-        .querySelectorAll(
-          'script, style, iframe, noscript, header, footer, nav, aside, .ad, .advert, .share, .link, .recommend',
-        )
-        .forEach((e) => e.remove());
-
-    dom.Element? targetElement;
-
-    // 2. 優先使用指定的自訂選擇器
-    if (selector != null && selector.isNotEmpty) {
-      targetElement = document.querySelector(selector);
-    }
-
-    // 3. 遍歷常見小說正文選擇器矩陣
-    if (targetElement == null) {
-      for (final sel in commonContentSelectors) {
-        final el = document.querySelector(sel);
-        if (el != null && el.text.trim().length >= 80) {
-          targetElement = el;
-          break;
-        }
-      }
-    }
-
-    // 4. 備援啟發式：評估字元長度與段落密度加權
-    if (targetElement == null) {
-      int maxScore = 0;
-      for (final el in document.querySelectorAll('div, article, section, main, td')) {
-        final pCount = el.querySelectorAll('p').length;
-        final textLength = el.text.trim().length;
-        // 段落數量加權 + 內文字數
-        final score = pCount * 60 + textLength;
-
-        if (score > maxScore) {
-          maxScore = score;
-          targetElement = el;
-        }
-      }
-    }
-
-    if (targetElement == null) return '';
-
-    // 5. 段落淨化與排版重組
-    return _cleanAndFormatElement(targetElement);
+  Map<String, dynamic> toMap() {
+    return {
+      'chapterIndex': chapterIndex,
+      'title': title,
+      'content': content,
+      'chapterUrl': chapterUrl,
+      'mode': mode.name,
+      'isFromCache': isFromCache ? 1 : 0,
+    };
   }
 
-  static String _cleanAndFormatElement(dom.Element element) {
-    // 將 <br> 替換為換行符號
-    element.querySelectorAll('br').forEach((br) => br.replaceWith(dom.Text('\n')));
-
-    final paragraphs = <String>[];
-    final pTags = element.querySelectorAll('p');
-
-    if (pTags.isNotEmpty) {
-      for (final p in pTags) {
-        final line = _cleanLine(p.text);
-        if (line.isNotEmpty && !_watermarkPattern.hasMatch(line)) {
-          paragraphs.add('  $line'); // 補齊傳統縮排
-        }
-      }
-    } else {
-      for (final rawLine in element.text.split('\n')) {
-        final line = _cleanLine(rawLine);
-        if (line.isNotEmpty && !_watermarkPattern.hasMatch(line)) {
-          paragraphs.add('  $line');
-        }
-      }
-    }
-
-    return paragraphs.join('\n\n');
-  }
-
-  static String _cleanLine(String text) {
-    return text
-        .replaceAll(RegExp(r'[\u00a0\u3000]'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+  factory ChapterContentResult.fromMap(Map<String, dynamic> map) {
+    return ChapterContentResult(
+      chapterIndex: map['chapterIndex'] as int? ?? 0,
+      title: map['title'] as String? ?? '',
+      content: map['content'] as String? ?? '',
+      chapterUrl: map['chapterUrl'] as String? ?? '',
+      mode: map['mode'] == 'webView' ? ReadingMode.webView : ReadingMode.nativeText,
+      isFromCache: (map['isFromCache'] as int? ?? 0) == 1,
+    );
   }
 }
 
-/// 雙模式章節排程與預載服務
 class ChapterReaderService {
-  final http.Client _httpClient;
-  final Future<Map<String, dynamic>?> Function(String bookId, int chapterIndex)? _dbChapterGetter;
-  final Future<void> Function(String bookId, int chapterIndex, String content)? _dbChapterSaver;
+  // 單例模式 (Singleton)
+  static final ChapterReaderService instance = ChapterReaderService._internal();
 
-  ChapterReaderService({
-    http.Client? httpClient,
-    Future<Map<String, dynamic>?> Function(String bookId, int chapterIndex)? dbChapterGetter,
-    Future<void> Function(String bookId, int chapterIndex, String content)? dbChapterSaver,
-  })  : _httpClient = httpClient ?? http.Client(),
-        _dbChapterGetter = dbChapterGetter,
-        _dbChapterSaver = dbChapterSaver;
+  factory ChapterReaderService() => instance;
 
-  static final ChapterReaderService instance = ChapterReaderService();
+  ChapterReaderService._internal();
 
-  Future<Map<String, dynamic>?> _getChapter(String bookId, int index) async {
-    if (_dbChapterGetter != null) return _dbChapterGetter!(bookId, index);
-    return await LibraryDatabase.instance.getChapter(bookId, index);
+  // 靜態屬性供 WebReadView 等畫面存取
+  static String? sharedUserAgent;
+  static String sharedCookies = '';
+
+  Database? _db;
+
+  void setDatabase(Database database) {
+    _db = database;
   }
 
-  Future<void> _saveChapter(String bookId, int index, String content) async {
-    if (_dbChapterSaver != null) {
-      await _dbChapterSaver!(bookId, index, content);
-      return;
+  /// 從 SQLite 讀取快取章節
+  Future<Map<String, dynamic>?> getChapterFromDb(String url, {String? bookId, int? chapterIndex}) async {
+    if (_db == null) return null;
+    try {
+      final List<Map<String, dynamic>> results;
+      if (url.isNotEmpty) {
+        results = await _db!.query(
+          'chapters',
+          where: 'url = ?',
+          whereArgs: [url],
+          limit: 1,
+        );
+      } else if (bookId != null && chapterIndex != null) {
+        results = await _db!.query(
+          'chapters',
+          where: 'bookId = ? AND chapterIndex = ?',
+          whereArgs: [bookId, chapterIndex],
+          limit: 1,
+        );
+      } else {
+        return null;
+      }
+
+      if (results.isNotEmpty) {
+        return results.first;
+      }
+    } catch (e) {
+      debugPrint('[ChapterReaderService] 查詢快取失敗: $e');
     }
-    await LibraryDatabase.instance.saveChapterContent(bookId, index, content);
+    return null;
   }
 
-  /// 載入章節核心方法（雙模式調度 + 快取優先）
-  Future<ChapterContentResult> loadChapter({
-    required String bookId,
+  /// 儲存章節資料至本地 SQLite 快取
+  Future<void> saveChapterToDb({
+    required String url,
+    required String title,
+    required String content,
     required int chapterIndex,
-    String? readSelector,
+    String? bookId,
+  }) async {
+    if (_db == null) return;
+    try {
+      await dbSaveLogic(
+        url: url,
+        title: title,
+        content: content,
+        chapterIndex: chapterIndex,
+        bookId: bookId,
+      );
+    } catch (e) {
+      debugPrint('[ChapterReaderService] 寫入快取失敗: $e');
+    }
+  }
+
+  Future<void> dbSaveLogic({
+    required String url,
+    required String title,
+    required String content,
+    required int chapterIndex,
+    String? bookId,
+  }) async {
+    await _db!.insert(
+      'chapters',
+      {
+        'url': url,
+        'title': title,
+        'content': content,
+        'chapterIndex': chapterIndex,
+        if (bookId != null) 'bookId': bookId,
+        'isSaved': 1,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// 載入章節核心方法
+  Future<ChapterContentResult> loadChapter({
+    String? bookId,
+    required int chapterIndex,
+    String? title,
+    String? url,
     bool forceRefresh = false,
   }) async {
-    // 1. 檢查本地 SQLite 快取 (Cache Hit)
-    final chapterData = await _getChapter(bookId, chapterIndex);
-    final title = chapterData?['title'] as String? ?? '第 $chapterIndex 章';
-    final url = chapterData?['chapterUrl'] as String?;
+    final effectiveUrl = url ?? '';
+    final effectiveTitle = title ?? '第 ${chapterIndex + 1} 章';
 
-    if (!forceRefresh && chapterData != null) {
-      final isSaved = (chapterData['isSaved'] as int? ?? 0) == 1;
-      final cachedContent = chapterData['content'] as String?;
+    final chapterData = await getChapterFromDb(
+      effectiveUrl,
+      bookId: bookId,
+      chapterIndex: chapterIndex,
+    );
 
-      if (isSaved && cachedContent != null && cachedContent.isNotEmpty) {
+    // 1. 檢查本地 SQLite 快取：只要 content 有實質文字（>= 80 字），就是 100% 快取命中！
+    final cachedContent = chapterData?['content'] as String?;
+    if (!forceRefresh && cachedContent != null && cachedContent.trim().length >= 80) {
+      debugPrint(
+          '[ChapterReaderService] ✅ SQLite 快取命中: 第 ${chapterIndex + 1} 章 (${cachedContent.length} 字)，秒開！');
+      return ChapterContentResult(
+        chapterIndex: chapterIndex,
+        title: effectiveTitle,
+        content: cachedContent,
+        chapterUrl: effectiveUrl,
+        mode: ReadingMode.nativeText,
+        isFromCache: true,
+      );
+    }
+
+    if (effectiveUrl.isEmpty) {
+      throw Exception('章節 URL 為空且無本地快取可用');
+    }
+
+    // 2. 背景發起網路請求：補上 Referer 防盜鏈與 User-Agent
+    final headers = <String, String>{
+      'User-Agent': sharedUserAgent ??
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': effectiveUrl.contains('po18')
+          ? 'https://wap.po18.in/'
+          : 'https://czbooks.net/', // 👈 補上防盜鏈 Referer
+    };
+    if (sharedCookies.isNotEmpty) {
+      headers['Cookie'] = sharedCookies;
+    }
+
+    try {
+      final response = await http.get(Uri.parse(effectiveUrl), headers: headers);
+      if (response.statusCode != 200) {
+        throw Exception('網路請求失敗，狀態碼: ${response.statusCode}');
+      }
+
+      final rawHtml = utf8.decode(response.bodyBytes, allowMalformed: true);
+      final parsedContent = parseHtmlContent(rawHtml, effectiveUrl);
+
+      // 若正文實質文字足夠，寫入本地快取
+      if (parsedContent.trim().length >= 80) {
+        await saveChapterToDb(
+          url: effectiveUrl,
+          title: effectiveTitle,
+          content: parsedContent,
+          chapterIndex: chapterIndex,
+          bookId: bookId,
+        );
+      }
+
+      return ChapterContentResult(
+        chapterIndex: chapterIndex,
+        title: effectiveTitle,
+        content: parsedContent,
+        chapterUrl: effectiveUrl,
+        mode: ReadingMode.nativeText,
+        isFromCache: false,
+      );
+    } catch (e) {
+      debugPrint('[ChapterReaderService] 遠端載入章節異常: $e');
+      if (cachedContent != null && cachedContent.isNotEmpty) {
+        debugPrint('[ChapterReaderService] 載入失敗但有舊快取，降級使用本地快取');
         return ChapterContentResult(
           chapterIndex: chapterIndex,
-          title: title,
+          title: effectiveTitle,
           content: cachedContent,
-          chapterUrl: url,
+          chapterUrl: effectiveUrl,
           mode: ReadingMode.nativeText,
           isFromCache: true,
         );
       }
+      rethrow;
     }
-
-    if (url == null || url.isEmpty) {
-      return ChapterContentResult(
-        chapterIndex: chapterIndex,
-        title: title,
-        content: null,
-        chapterUrl: null,
-        mode: ReadingMode.webViewFallback,
-        isFromCache: false,
-      );
-    }
-
-    // 2. Cache Miss：透過網路請求抓取正文
-    try {
-      final response = await _httpClient.get(
-        Uri.parse(url),
-        headers: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        String htmlContent;
-        try {
-          htmlContent = utf8.decode(response.bodyBytes);
-        } catch (_) {
-          htmlContent = response.body;
-        }
-
-        final cleanText = ChapterContentExtractor.extractText(htmlContent, selector: readSelector);
-
-        if (cleanText.trim().length >= 100) {
-          await _saveChapter(bookId, chapterIndex, cleanText);
-
-          return ChapterContentResult(
-            chapterIndex: chapterIndex,
-            title: title,
-            content: cleanText,
-            chapterUrl: url,
-            mode: ReadingMode.nativeText,
-            isFromCache: false,
-          );
-        }
-      }
-    } catch (_) {
-      // 網路或解析失敗，自動降級
-    }
-
-    // 3. 抽取失敗或反爬蟲：安全降級為 WebView 網頁閱讀模式
-    return ChapterContentResult(
-      chapterIndex: chapterIndex,
-      title: title,
-      content: null,
-      chapterUrl: url,
-      mode: ReadingMode.webViewFallback,
-      isFromCache: false,
-    );
   }
 
-  /// 滑動即預載（背景預取後續 N 章）
-  Future<void> preloadAdjacentChapters({
-    required String bookId,
-    required int currentChapterIndex,
-    String? readSelector,
-    int preloadCount = 2,
-  }) async {
-    for (int i = 1; i <= preloadCount; i++) {
-      final targetIndex = currentChapterIndex + i;
-      final cached = await _getChapter(bookId, targetIndex);
-
-      // 若已快取則跳過
-      if (cached != null && (cached['isSaved'] as int? ?? 0) == 1) {
-        continue;
-      }
-
-      // 非同步觸發抓取並寫入快取
-      await loadChapter(
-        bookId: bookId,
-        chapterIndex: targetIndex,
-        readSelector: readSelector,
-      );
+  /// 依來源網站解析內文
+  String parseHtmlContent(String html, String url) {
+    if (url.contains('czbooks.net')) {
+      return _parseCzbooks(html);
+    } else if (url.contains('po18')) {
+      return _parsePo18(html);
     }
+    return _cleanGeneralHtml(html);
+  }
+
+  String _parseCzbooks(String html) {
+    final contentRegex = RegExp(
+      r'<div[^>]*class=["\x27][^"\x27]*content[^"\x27]*["\x27][^>]*>([\s\S]*?)<\/div>',
+      caseSensitive: false,
+    );
+    final match = contentRegex.firstMatch(html);
+    if (match != null && match.groupCount >= 1) {
+      return _cleanGeneralHtml(match.group(1)!);
+    }
+    return _cleanGeneralHtml(html);
+  }
+
+  String _parsePo18(String html) {
+    final contentRegex = RegExp(
+      r'<div[^>]*class=["\x27][^"\x27]*c_c[^"\x27]*["\x27][^>]*>([\s\S]*?)<\/div>',
+      caseSensitive: false,
+    );
+    final match = contentRegex.firstMatch(html);
+    if (match != null && match.groupCount >= 1) {
+      return _cleanGeneralHtml(match.group(1)!);
+    }
+    return _cleanGeneralHtml(html);
+  }
+
+  String _cleanGeneralHtml(String html) {
+    var text = html.replaceAll(
+      RegExp(r'<script[\s\S]*?<\/script>', caseSensitive: false),
+      '',
+    );
+    text = text.replaceAll(
+      RegExp(r'<style[\s\S]*?<\/style>', caseSensitive: false),
+      '',
+    );
+    text = text.replaceAll(RegExp(r'<br\s*[\/]?>', caseSensitive: false), '\n');
+    text = text.replaceAll(RegExp(r'<\/p>', caseSensitive: false), '\n\n');
+    text = text.replaceAll(RegExp(r'<[^>]+>'), '');
+    text = text
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>');
+    return text.trim();
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:inkflow_reader/src/core/services/chapter_reader_service.dart';
+import 'package:sqflite/sqflite.dart';
 
 void main() {
   group('ChapterContentExtractor 正文抽取測試', () {
@@ -47,153 +48,82 @@ void main() {
     });
   });
 
-  group('ChapterReaderService 雙模式與預載管線測試', () {
-    const fakeBookId = 'book_001';
+  // 依目前 API 改寫：服務改為單例 + setDatabase(sqflite)，下載走 package:http 頂層函式；
+  // 舊版的 dbChapterGetter/httpClient 注入、webViewFallback 與 preloadAdjacentChapters 已移除。
+  group('ChapterReaderService 快取與降級', () {
+    final service = ChapterReaderService.instance;
+    final longText = '這是本地已快取的極速內文。' * 10; // >= 80 字才算快取命中
 
-    test('Cache Hit：本地已快取時直接回傳 nativeText 模式且不發送 HTTP 請求', () async {
-      final inMemoryDb = <int, Map<String, dynamic>>{
-        0: {
-          'chapterIndex': 0,
-          'title': '第一章',
-          'chapterUrl': 'https://ex.com/c1.html',
-          'isSaved': 1,
-          'content': '這是本地已快取的極速內文。',
-        }
-      };
-
-      final service = ChapterReaderService(
-        dbChapterGetter: (bookId, index) async => inMemoryDb[index],
-        dbChapterSaver: (bookId, index, content) async {},
+    test('Cache Hit：快取內容足夠時直接回傳且不發送 HTTP', () async {
+      final db = _FakeDb({'content': longText});
+      service.setDatabase(db);
+      var requests = 0;
+      final result = await http.runWithClient(
+        () => service.loadChapter(bookId: 'b', chapterIndex: 0, url: 'https://ex.com/c1.html'),
+        () => MockClient((_) async {
+          requests++;
+          return http.Response('', 200);
+        }),
       );
-
-      final result = await service.loadChapter(
-        bookId: fakeBookId,
-        chapterIndex: 0,
-      );
-
-      expect(result.mode, ReadingMode.nativeText);
       expect(result.isFromCache, isTrue);
-      expect(result.content, '這是本地已快取的極速內文。');
+      expect(result.mode, ReadingMode.nativeText);
+      expect(result.content, longText);
+      expect(requests, 0);
     });
 
-    test('Cache Miss：發起 HTTP 抓取、解析純文字並自動回寫本地快取', () async {
-      final inMemoryDb = <int, Map<String, dynamic>>{
-        1: {
-          'chapterIndex': 1,
-          'title': '第二章 逆境崛起',
-          'chapterUrl': 'https://ex.com/c2.html',
-          'isSaved': 0,
-          'content': null,
-        }
-      };
-
-      final mockClient = MockClient((request) async {
-        return http.Response(
-          '''
-            <div id="read-box">
-              <p>狂風呼嘯而過，暴雨洗刷著大地。</p>
-              <p>少年迎風而立，周身靈氣奔湧澎湃！長度充分足夠驗證。</p>
-            </div>
-          ''',
-          200,
-          headers: {'content-type': 'text/html; charset=utf-8'},
-        );
-      });
-
-      final service = ChapterReaderService(
-        httpClient: mockClient,
-        dbChapterGetter: (bookId, index) async => inMemoryDb[index],
-        dbChapterSaver: (bookId, index, content) async {
-          inMemoryDb[index] = {
-            ...inMemoryDb[index]!,
-            'isSaved': 1,
-            'content': content,
-          };
-        },
+    test('Cache Miss：抓取解析後寫回快取', () async {
+      final db = _FakeDb(null);
+      service.setDatabase(db);
+      final body = '<div id="read-box"><p>少年迎風而立，周身靈氣奔湧澎湃！</p>'
+          '<p>${'狂風呼嘯而過，暴雨洗刷著大地。' * 6}</p></div>';
+      final result = await http.runWithClient(
+        () => service.loadChapter(bookId: 'b', chapterIndex: 1, url: 'https://ex.com/c2.html'),
+        () => MockClient((_) async => http.Response.bytes(utf8.encode(body), 200)),
       );
-
-      final result = await service.loadChapter(
-        bookId: fakeBookId,
-        chapterIndex: 1,
-        readSelector: '#read-box',
-      );
-
-      expect(result.mode, ReadingMode.nativeText);
       expect(result.isFromCache, isFalse);
       expect(result.content, contains('少年迎風而立'));
-
-      // 明確以變數取出 key 1 進行驗證，避免格式錯亂
-      const targetIndex = 1;
-      final savedChapter1 = inMemoryDb[targetIndex];
-      expect(savedChapter1?['isSaved'], 1);
-      expect(savedChapter1?['content'], contains('少年迎風而立'));
+      expect(db.inserted?['content'], contains('少年迎風而立'));
+      expect(db.inserted?['chapterIndex'], 1);
     });
 
-    test('Fallback：抓取失敗或遭遇強反爬時，安全降級為 webViewFallback 模式', () async {
-      final inMemoryDb = <int, Map<String, dynamic>>{
-        2: {
-          'chapterIndex': 2,
-          'title': '第三章 迷局',
-          'chapterUrl': 'https://ex.com/c3.html',
-          'isSaved': 0,
-          'content': null,
-        }
-      };
-
-      final mockClient = MockClient((request) async {
-        return http.Response('<html><body>Please verify you are human</body></html>', 503);
-      });
-
-      final service = ChapterReaderService(
-        httpClient: mockClient,
-        dbChapterGetter: (bookId, index) async => inMemoryDb[index],
+    test('抓取失敗但有舊快取：降級回傳舊快取', () async {
+      service.setDatabase(_FakeDb({'content': '短的舊快取'}));
+      final result = await http.runWithClient(
+        () => service.loadChapter(bookId: 'b', chapterIndex: 2, url: 'https://ex.com/c3.html'),
+        () => MockClient((_) async => http.Response('verify you are human', 503)),
       );
-
-      final result = await service.loadChapter(
-        bookId: fakeBookId,
-        chapterIndex: 2,
-      );
-
-      expect(result.mode, ReadingMode.webViewFallback);
-      expect(result.content, isNull);
-      expect(result.chapterUrl, 'https://ex.com/c3.html');
+      expect(result.isFromCache, isTrue);
+      expect(result.content, '短的舊快取');
     });
 
-    test('預加載管線：自動非同步抓取後續章節並快取入庫', () async {
-      final inMemoryDb = <int, Map<String, dynamic>>{
-        10: {'chapterIndex': 10, 'chapterUrl': 'https://ex.com/c10.html', 'isSaved': 0},
-        11: {'chapterIndex': 11, 'chapterUrl': 'https://ex.com/c11.html', 'isSaved': 0},
-      };
-
-      // 內文加長，保證通過字數驗證門檻
-      final mockClient = MockClient((request) async {
-        return http.Response(
-          '<div id="txt"><p>這是預加載章節的詳細正文內容，文字內容非常充足且完整，字數已確定超過三十字門檻。</p></div>',
-          200,
-          headers: {'content-type': 'text/html; charset=utf-8'},
-        );
-      });
-
-      final service = ChapterReaderService(
-        httpClient: mockClient,
-        dbChapterGetter: (bookId, index) async => inMemoryDb[index],
-        dbChapterSaver: (bookId, index, content) async {
-          inMemoryDb[index] = {...inMemoryDb[index]!, 'isSaved': 1, 'content': content};
-        },
+    test('抓取失敗且無快取：拋出例外交由呼叫端處理', () async {
+      service.setDatabase(_FakeDb(null));
+      await expectLater(
+        http.runWithClient(
+          () => service.loadChapter(bookId: 'b', chapterIndex: 3, url: 'https://ex.com/c4.html'),
+          () => MockClient((_) async => http.Response('', 503)),
+        ),
+        throwsException,
       );
-
-      // 讀者在第 9 章，預載後續 2 章 (第 10、11 章)
-      await service.preloadAdjacentChapters(
-        bookId: fakeBookId,
-        currentChapterIndex: 9,
-        readSelector: '#txt',
-        preloadCount: 2,
-      );
-
-      final savedChapter10 = inMemoryDb[10];
-      final savedChapter11 = inMemoryDb[11];
-      expect(savedChapter10?['isSaved'], 1);
-      expect(savedChapter11?['isSaved'], 1);
     });
   });
+}
+
+class _FakeDb extends Fake implements Database {
+  _FakeDb(this.row);
+  final Map<String, Object?>? row;
+  Map<String, Object?>? inserted;
+
+  @override
+  Future<List<Map<String, Object?>>> query(String table,
+          {bool? distinct, List<String>? columns, String? where, List<Object?>? whereArgs,
+          String? groupBy, String? having, String? orderBy, int? limit, int? offset}) async =>
+      row == null ? [] : [row!];
+
+  @override
+  Future<int> insert(String table, Map<String, Object?> values,
+      {String? nullColumnHack, ConflictAlgorithm? conflictAlgorithm}) async {
+    inserted = values;
+    return 1;
+  }
 }

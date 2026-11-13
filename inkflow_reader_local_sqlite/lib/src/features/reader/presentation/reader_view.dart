@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/library_database.dart';
@@ -98,6 +96,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     if (pageController.hasClients) {
       pageController.jumpToPage(0);
     }
+    _queueProgressSave();
   }
 
   /// 跨章換頁：倒退回上一章
@@ -138,6 +137,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     if (pageController.hasClients) {
       pageController.jumpToPage(0);
     }
+    _queueProgressSave();
   }
 
   @override
@@ -320,18 +320,25 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     final range = pages[page.clamp(0, pages.length - 1)];
     final textLength = ref.read(bookTextProvider).length;
     if (textLength == 0) return;
-    final chapter = widget.chapters.lastWhere(
-      (item) => item.offset <= range.start,
-      orElse: () => widget.chapters.first,
-    );
+    // 網路書一次只載入一章：章節以索引計，進度 = (已讀章數 + 章內比例) / 總章數
+    final isWeb = widget.book.sourceType == BookSourceType.web && widget.chapters.isNotEmpty;
+    final chapterIndex = _currentChapterIndex.clamp(0, widget.chapters.isEmpty ? 0 : widget.chapters.length - 1);
+    final chapter = isWeb
+        ? widget.chapters[chapterIndex]
+        : widget.chapters.lastWhere(
+            (item) => item.offset <= range.start,
+            orElse: () => widget.chapters.first,
+          );
+    final inChapter = range.start / textLength;
     final updated = widget.book.copyWith(
       characterOffset: range.start,
       currentChapter: chapter.title,
-      progressRatio: range.start / textLength,
+      progressRatio: isWeb ? (chapterIndex + inChapter) / widget.chapters.length : inChapter,
       lastReadAt: DateTime.now(),
     );
     latestBook = updated;
     await LibraryDatabase.instance.saveProgress(updated);
+    if (isWeb) await LibraryDatabase.instance.saveChapterIndex(widget.book.id, chapterIndex);
   }
 
   Future<void> _exit() async {

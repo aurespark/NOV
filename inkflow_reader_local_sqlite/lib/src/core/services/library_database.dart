@@ -12,6 +12,9 @@ class LibraryDatabase {
 
   Database? _db;
 
+  @visibleForTesting
+  set testDatabase(Database db) => _db = db;
+
   Future<Database> get database async {
     if (_db != null) return _db!;
     _db = await _initDatabase();
@@ -192,17 +195,32 @@ class LibraryDatabase {
 
   Future<void> saveProgress(Book book) async {
     final db = await database;
-    await db.insert(
-      'reading_states',
-      {
-        'bookId': book.id,
-        'characterOffset': book.characterOffset,
-        'currentChapter': book.currentChapter,
-        'progressRatio': book.progressRatio.clamp(0, 1),
-        'lastReadAt': (book.lastReadAt ?? DateTime.now()).toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    final values = {
+      'characterOffset': book.characterOffset,
+      'currentChapter': book.currentChapter,
+      'progressRatio': book.progressRatio.clamp(0, 1),
+      'lastReadAt': (book.lastReadAt ?? DateTime.now()).toIso8601String(),
+    };
+    // 先 update 再 insert：REPLACE 會把 currentChapterIndex 重設為 0
+    final n = await db.update('reading_states', values, where: 'bookId = ?', whereArgs: [book.id]);
+    if (n == 0) await db.insert('reading_states', {'bookId': book.id, ...values});
+  }
+
+  /// 網路書以章節為單位閱讀，章節索引與章內位置分開保存。
+  Future<void> saveChapterIndex(String bookId, int index) async {
+    final db = await database;
+    final n = await db.update('reading_states', {'currentChapterIndex': index},
+        where: 'bookId = ?', whereArgs: [bookId]);
+    if (n == 0) {
+      await db.insert('reading_states', {'bookId': bookId, 'currentChapterIndex': index});
+    }
+  }
+
+  Future<int> loadChapterIndex(String bookId) async {
+    final db = await database;
+    final rows = await db.query('reading_states',
+        columns: ['currentChapterIndex'], where: 'bookId = ?', whereArgs: [bookId], limit: 1);
+    return rows.isEmpty ? 0 : (rows.first['currentChapterIndex'] as int? ?? 0);
   }
 
   Future<List<ChapterMarker>> loadChapters(String bookId) async {

@@ -33,6 +33,7 @@ class _WebReadViewState extends ConsumerState<WebReadView> {
   // 章節導航狀態
   List<Map<String, dynamic>> _savedChapters = [];
   int _currentChapterIndex = 0;
+  bool _progressRestored = false; // 還原前不寫入，避免目錄頁載入時把進度蓋成 0
 
   @override
   void initState() {
@@ -50,6 +51,9 @@ class _WebReadViewState extends ConsumerState<WebReadView> {
             debugPrint('[WebReadView] 📄 網頁載入完成: $url');
             _detectContentAndTitle();
             _matchCurrentChapter(url);
+            if (_progressRestored) {
+              LibraryDatabase.instance.saveChapterIndex(widget.book.id, _currentChapterIndex);
+            }
           },
           onNavigationRequest: (request) {
             if (InkflowSchemeRouter.isInternalScheme(request.url)) {
@@ -78,6 +82,14 @@ class _WebReadViewState extends ConsumerState<WebReadView> {
         _savedChapters = list;
       });
       debugPrint('[WebReadView] 📚 已從本地載入 ${_savedChapters.length} 個已存章節');
+    }
+    if (!_progressRestored && mounted) {
+      final saved = await LibraryDatabase.instance.loadChapterIndex(widget.book.id);
+      _progressRestored = true;
+      if (saved > 0 && saved < _savedChapters.length) {
+        debugPrint('[WebReadView] 還原閱讀進度: 第 ${saved + 1} 章');
+        _goToChapter(saved);
+      }
     }
   }
 

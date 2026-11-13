@@ -136,12 +136,14 @@ void main() {
 }
 
 class _FakeDb extends Fake implements Database {
+  _FakeDb([this.row]);
+  final Map<String, Object?>? row;
   final updates = <String>[];
   @override
   Future<List<Map<String, Object?>>> query(String table,
           {bool? distinct, List<String>? columns, String? where, List<Object?>? whereArgs,
           String? groupBy, String? having, String? orderBy, int? limit, int? offset}) async =>
-      [];
+      row == null ? [] : [row!];
   @override
   Future<int> update(String table, Map<String, Object?> values,
       {String? where, List<Object?>? whereArgs, ConflictAlgorithm? conflictAlgorithm}) async {
@@ -175,6 +177,20 @@ void onlineServiceTests() {
           fetcher: (u) async => u == base ? pages[u]! : throw http.ClientException('offline'));
       expect(text, '第一頁內容。');
       expect(db.updates, isEmpty);
+    });
+
+    test('未傳網址時改用目錄存的 chapterUrl（ReaderView 的 ChapterMarker 沒有網址）', () async {
+      final fetched = <String>[];
+      final text = await OnlineChapterService(db: _FakeDb({'content': null, 'chapterUrl': base}))
+          .getChapterText(bookId: 'b', chapterIndex: 0, chapterUrl: '', fetcher: (u) async {
+        fetched.add(u);
+        return pages[u]!;
+      });
+      expect(fetched.first, base);
+      expect(text, contains('第一頁內容。'));
+      final none = await OnlineChapterService(db: _FakeDb())
+          .getChapterText(bookId: 'b', chapterIndex: 0, chapterUrl: '', fetcher: (_) async => fail('不應發出請求'));
+      expect(none, contains('沒有來源網址'));
     });
 
     test('完全斷線：回傳錯誤提示且不寫快取', () async {

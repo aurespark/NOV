@@ -21,7 +21,7 @@ class OnlineChapterService {
     try {
       final rows = await db.query(
         'chapters',
-        columns: ['content'],
+        columns: ['content', 'chapterUrl'],
         where: 'bookId = ? AND chapterIndex = ?',
         whereArgs: [bookId, chapterIndex],
         limit: 1,
@@ -31,9 +31,13 @@ class OnlineChapterService {
         debugPrint('[ContentFetch] ✅ 本地快取命中: 第 ${chapterIndex + 1} 章 (${text.length} 字)');
         return text;
       }
+      // ReaderView 收到的 ChapterMarker 沒有網址，改用目錄寫入的 chapterUrl
+      final stored = rows.isEmpty ? null : rows.first['chapterUrl'];
+      if (chapterUrl.isEmpty && stored is String) chapterUrl = stored;
     } catch (e) {
       debugPrint('[ContentFetch] ⚠️ 快取查詢略過: $e');
     }
+    if (chapterUrl.isEmpty) return '（本章沒有來源網址，請重新匯入目錄）';
 
     debugPrint('[ContentFetch] 🌐 開始線上抓取正文: $chapterUrl');
     // 同章分頁（123_2.html…）逐頁合併；中途失敗則回傳已取得部分且不寫快取

@@ -1,25 +1,14 @@
-﻿import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sqflite/sqflite.dart';
+import '../../../core/services/novel_html_extractor.dart';
 import '../../../core/services/online_chapter_service.dart';
 import '../domain/reader_models.dart';
 import 'reader_controller.dart';
 import 'reader_view.dart';
 
-// ponytail: 用 dart:io 內建 HttpClient，零外部 package 依賴
-Future<String> defaultHtmlFetcher(String url) async {
-  final client = HttpClient();
-  try {
-    final request = await client.getUrl(Uri.parse(url));
-    request.headers.set('User-Agent', 'Mozilla/5.0');
-    final response = await request.close();
-    return await response.transform(utf8.decoder).join();
-  } finally {
-    client.close();
-  }
-}
+// GBK/Big5 站點需依 charset 解碼，改用共用下載器
+Future<String> defaultHtmlFetcher(String url) => fetchNovelHtml(url);
 
 Future<void> openChapterInReader({
   required BuildContext context,

@@ -1,30 +1,14 @@
-﻿import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'novel_html_extractor.dart';
+
 class OnlineChapterService {
+  static const _maxSubPages = 20;
   final Database db;
   OnlineChapterService({required this.db});
 
-  static String extractText(String html) {
-    if (html.isEmpty) return '';
-    final match = RegExp(r"""<div[^>]*class=["']content["'][^>]*>([\s\S]*?)</div>""", caseSensitive: false)
-        .firstMatch(html);
-    final raw = match?.group(1) ?? html;
-    final cleaned = raw
-        .replaceAll(RegExp(r"""<script[\s\S]*?</script>|<style[\s\S]*?</style>|<ins[\s\S]*?</ins>""", caseSensitive: false), '')
-        .replaceAll(RegExp(r"""<br\s*/?>""", caseSensitive: false), '\n')
-        .replaceAll(RegExp(r"""</p>""", caseSensitive: false), '\n\n')
-        .replaceAll(RegExp(r"""<[^>]+>"""), '')
-        .replaceAll('&nbsp;', ' ')
-        .trim();
-
-    // 每行去除 HTML 標籤帶來的縮排空白，小說排版更整齊
-    return cleaned
-        .split('\n')
-        .map((line) => line.trim())
-        .join('\n')
-        .trim();
-  }
+  static String extractText(String html) => ChapterContentExtractor.extractText(html);
 
   Future<String> getChapterText({
     required String bookId,
@@ -38,7 +22,7 @@ class OnlineChapterService {
       final rows = await db.query(
         'chapters',
         columns: ['content'],
-        where: 'book_id = ? AND chapter_index = ?',
+        where: 'bookId = ? AND chapterIndex = ?',
         whereArgs: [bookId, chapterIndex],
         limit: 1,
       );
@@ -52,25 +36,40 @@ class OnlineChapterService {
     }
 
     debugPrint('[ContentFetch] 🌐 開始線上抓取正文: $chapterUrl');
-    String rawHtml = '';
-    try {
-      rawHtml = await fetcher(chapterUrl);
-    } catch (e) {
-      debugPrint('[ContentFetch] ❌ 網路抓取失敗: $e');
-      return '（網路連線失敗，請檢查網路或稍後重試）';
+    // 同章分頁（123_2.html…）逐頁合併；中途失敗則回傳已取得部分且不寫快取
+    final parts = <String>[];
+    final seen = <String>{};
+    var url = chapterUrl;
+    var complete = true;
+    while (seen.add(url) && seen.length <= _maxSubPages) {
+      final String rawHtml;
+      try {
+        rawHtml = await fetcher(url);
+      } catch (e) {
+        debugPrint('[ContentFetch] ❌ 網路抓取失敗: $url $e');
+        complete = false;
+        break;
+      }
+      final part = extractText(rawHtml);
+      if (part.isNotEmpty) parts.add(part);
+      final next = ChapterContentExtractor.findNextPageUrl(rawHtml, url);
+      if (next == null) break;
+      debugPrint('[ContentFetch] ➡️ 同章下一頁: $next');
+      url = next;
     }
 
-    final text = extractText(rawHtml);
+    final text = parts.join('\n\n');
     if (text.isEmpty) {
       debugPrint('[ContentFetch] ⚠️ 警告: 抓取正文為空');
-      return '（本章內容為空或解析失敗）';
+      return complete ? '（本章內容為空或解析失敗）' : '（網路連線失敗，請檢查網路或稍後重試）';
     }
+    if (!complete) return text;
 
     try {
       await db.update(
         'chapters',
         {'content': text},
-        where: 'book_id = ? AND chapter_index = ?',
+        where: 'bookId = ? AND chapterIndex = ?',
         whereArgs: [bookId, chapterIndex],
       );
       debugPrint('[ContentFetch] 💾 正文寫入快取成功: 第 ${chapterIndex + 1} 章 (${text.length} 字)');

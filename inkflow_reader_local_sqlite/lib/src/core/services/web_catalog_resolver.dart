@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
@@ -7,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../../features/library/book.dart';
 import '../../features/reader/domain/reader_models.dart';
 import 'library_database.dart';
+import 'novel_html_extractor.dart';
 
 class SiteRule {
   final String domain;
@@ -131,12 +131,8 @@ class WebCatalogResolver {
       throw Exception('無法連線至該小說網址 (HTTP ${response.statusCode})');
     }
 
-    String htmlContent;
-    try {
-      htmlContent = utf8.decode(response.bodyBytes);
-    } catch (_) {
-      htmlContent = response.body;
-    }
+    final htmlContent =
+        await decodeHtmlBytes(response.bodyBytes, response.headers['content-type']);
 
     final doc = html_parser.parse(htmlContent);
 
@@ -168,19 +164,20 @@ class WebCatalogResolver {
 
     // 4. 解析目錄章節
     final targetBookId = bookId ?? DateTime.now().millisecondsSinceEpoch.toString();
-    final resolveResult = resolve(
+    final chapters = await _resolveAllPages(
       bookId: targetBookId,
-      rawUrl: normalizedUrl,
-      htmlContent: htmlContent,
+      pageUrl: normalizedUrl,
+      html: htmlContent,
+      client: httpClient,
     );
 
-    debugPrint('[WebCatalog] ✅ 解析成功！書名:《$title》, 作者: $author, 目錄共 ${resolveResult.chapters.length} 章');
+    debugPrint('[WebCatalog] ✅ 解析成功！書名:《$title》, 作者: $author, 目錄共 ${chapters.length} 章');
 
     return (
       title: title,
       author: author,
       coverUrl: coverUrl != null ? _resolveUrl(uri, coverUrl) : null,
-      chapters: resolveResult.chapters,
+      chapters: chapters,
       isAntiBotProtected: false,
     );
   }
@@ -215,7 +212,7 @@ class WebCatalogResolver {
       );
       if (chapters.isNotEmpty) {
         return CatalogResolveResult(
-          chapters: chapters,
+          chapters: dedupeKeepLast(chapters),
           usedStrategy: 'rule_selector',
           detectedCatalogSelector: activeSelector,
         );
@@ -229,7 +226,7 @@ class WebCatalogResolver {
     );
 
     return CatalogResolveResult(
-      chapters: heuristicChapters,
+      chapters: dedupeKeepLast(heuristicChapters),
       usedStrategy: 'heuristic',
       detectedCatalogSelector: null,
     );
@@ -280,7 +277,7 @@ class WebCatalogResolver {
     final candidateContainers =
         document.querySelectorAll('div, ul, ol, dl, table, section');
     dom.Element? bestContainer;
-    int highestScore = -1;
+    int highestScore = -1 << 30;
 
     for (final container in candidateContainers) {
       final links = container.querySelectorAll('a');
@@ -303,10 +300,10 @@ class WebCatalogResolver {
         }
       }
 
-      score += matchedChapterCount * 5;
-      score += links.length;
+      // 非章節連結（導覽、推薦）扣分，外層大容器才不會因連結較多而勝出
+      score += matchedChapterCount * 5 - (links.length - matchedChapterCount) * 2;
 
-      if (score > highestScore && matchedChapterCount > 0) {
+      if (score >= highestScore && matchedChapterCount > 0) {
         highestScore = score;
         bestContainer = container;
       }
@@ -316,7 +313,6 @@ class WebCatalogResolver {
 
     final links = bestContainer.querySelectorAll('a');
     final chapters = <ChapterItem>[];
-    final seenUrls = <String>{};
     int index = 0;
 
     for (final a in links) {
@@ -327,8 +323,6 @@ class WebCatalogResolver {
       if (title.isEmpty || _noisePattern.hasMatch(title)) continue;
 
       final absoluteUrl = _resolveUrl(baseUri, href);
-      if (seenUrls.contains(absoluteUrl)) continue;
-      seenUrls.add(absoluteUrl);
 
       chapters.add(ChapterItem(
         bookId: bookId,
@@ -340,6 +334,128 @@ class WebCatalogResolver {
     }
 
     return chapters;
+  }
+
+  static const _maxCatalogPages = 50;
+
+  /// 參考 APK：書籍頁若有「查看完整目錄」等連結先跳過去，
+  /// 再沿「下一頁」或 <select> 分頁下拉逐頁合併。單頁失敗只停止翻頁，不丟已取得章節。
+  Future<List<ChapterItem>> _resolveAllPages({
+    required String bookId,
+    required String pageUrl,
+    required String html,
+    required http.Client client,
+  }) async {
+    final entry = findCatalogEntryUrl(html, pageUrl);
+    if (entry != null) {
+      try {
+        debugPrint('[WebCatalog] ↪️ 進入完整目錄頁: $entry');
+        html = await fetchNovelHtml(entry, client: client);
+        pageUrl = entry;
+      } catch (e) {
+        debugPrint('[WebCatalog] ⚠️ 完整目錄頁載入失敗，沿用原頁: $e');
+      }
+    }
+
+    final all = <ChapterItem>[];
+    final seenPages = <String>{pageUrl};
+    while (true) {
+      final page = resolve(bookId: bookId, rawUrl: pageUrl, htmlContent: html).chapters;
+      if (page.isEmpty && all.isNotEmpty) break; // 「下一頁」不是目錄分頁
+      all.addAll(page);
+      final next = findNextCatalogPageUrl(html, pageUrl);
+      if (next == null || !seenPages.add(next) || seenPages.length > _maxCatalogPages) break;
+      try {
+        debugPrint('[WebCatalog] ➡️ 目錄下一頁: $next');
+        html = await fetchNovelHtml(next, client: client);
+        pageUrl = next;
+      } catch (e) {
+        debugPrint('[WebCatalog] ⚠️ 目錄分頁載入失敗，停止翻頁: $e');
+        break;
+      }
+    }
+    final unique = dedupeKeepLast(all);
+    return [
+      for (var i = 0; i < unique.length; i++)
+        ChapterItem(
+          bookId: bookId,
+          chapterIndex: i,
+          title: unique[i].title,
+          chapterUrl: unique[i].chapterUrl,
+        ),
+    ];
+  }
+
+  static const _catalogEntryWords = [
+    '章节目录', '章節目錄', '查看完整目录', '查看完整目錄', '完整目录', '完整目錄',
+    '全部章节', '全部章節', '查看更多章节', '查看更多章節', '查看目录', '查看目錄',
+  ];
+
+  /// 書籍介紹頁上的「完整目錄」入口（APK 也限制文字 ≤10 字，避免誤抓長句）。
+  static String? findCatalogEntryUrl(String html, String pageUrl) {
+    final base = Uri.parse(pageUrl);
+    for (final a in html_parser.parse(html).querySelectorAll('a[href]')) {
+      final text = a.text.trim();
+      if (text.length > 10 || !_catalogEntryWords.any(text.contains)) continue;
+      final url = _absolute(base, a.attributes['href']!);
+      if (url != null && url != pageUrl) return url;
+    }
+    return null;
+  }
+
+  static const _nextPageWords = ['下一页', '下一頁', '下页', '下頁', '后一页', '後一頁'];
+
+  static String? findNextCatalogPageUrl(String html, String pageUrl) {
+    final base = Uri.parse(pageUrl);
+    final doc = html_parser.parse(html);
+    for (final a in doc.querySelectorAll('a[href]')) {
+      final text = a.text.trim();
+      if (text.length > 6 || !_nextPageWords.any(text.contains)) continue;
+      final url = _absolute(base, a.attributes['href']!);
+      if (url != null && url != pageUrl) return url;
+    }
+    // 手機版常見 <select><option value="/book/1/index_2.html">第2頁</option>
+    for (final select in doc.querySelectorAll('select')) {
+      final options = select.querySelectorAll('option');
+      final current = options.indexWhere((o) =>
+          o.attributes.containsKey('selected') ||
+          _absolute(base, o.attributes['value'] ?? '') == pageUrl);
+      if (current < 0 || current + 1 >= options.length) continue;
+      final url = _absolute(base, options[current + 1].attributes['value'] ?? '');
+      if (url != null && url != pageUrl) return url;
+    }
+    return null;
+  }
+
+  static String? _absolute(Uri base, String href) {
+    if (href.isEmpty || href.startsWith('javascript') || href.startsWith('#')) return null;
+    try {
+      final u = base.resolve(href);
+      return u.host == base.host ? u.toString() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 同網址保留「最後」一次出現：多數站點在目錄頂端放「最新章節」區塊，
+  /// 保留最後一次才不會把最新幾章排到第一章前面。
+  static List<ChapterItem> dedupeKeepLast(List<ChapterItem> chapters) {
+    final lastIndex = <String, int>{};
+    for (var i = 0; i < chapters.length; i++) {
+      lastIndex[chapters[i].chapterUrl ?? ''] = i;
+    }
+    final out = <ChapterItem>[];
+    for (var i = 0; i < chapters.length; i++) {
+      final c = chapters[i];
+      if (lastIndex[c.chapterUrl ?? ''] != i) continue;
+      out.add(ChapterItem(
+        bookId: c.bookId,
+        chapterIndex: out.length,
+        title: c.title,
+        chapterUrl: c.chapterUrl,
+      ));
+    }
+    return out;
   }
 
   String _resolveUrl(Uri baseUri, String href) {

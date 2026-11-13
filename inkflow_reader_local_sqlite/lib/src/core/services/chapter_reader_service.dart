@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
+export 'novel_html_extractor.dart' show ChapterContentExtractor;
+
 /// 閱讀模式列舉
 enum ReadingMode {
   nativeText,

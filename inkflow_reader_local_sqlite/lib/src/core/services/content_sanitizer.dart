@@ -28,7 +28,7 @@
       final trimmed = line.trim();
       if (trimmed.isEmpty) continue;
 
-      if (_isAdLine(trimmed)) continue;
+      if (isAdLine(trimmed)) continue;
 
       formattedLines.add('    $trimmed');
     }
@@ -36,8 +36,10 @@
     return formattedLines.join('\n\n');
   }
 
-  static bool _isAdLine(String line) {
+  static bool isAdLine(String line) {
     final adSignatures = [
+      RegExp(r'(最新章節|最新章节).{0,6}(請到|请到|請訪問|请访问|請上|请上)'),
+      RegExp(r'^(上一章|上一頁|上一页|返回目錄|返回目录|加入書籤|加入书签|下一章|下一頁|下一页|\s)+$'),
       RegExp(r'^(ps|ps:|溫馨提示|温馨提示).*', caseSensitive: false),
       RegExp(r'.*(請記住本站|请记住本站|點擊下一頁|点击下一页).*', caseSensitive: false),
       RegExp(r'.*(無廣告閱讀|无广告阅读|防採集|防采集).*', caseSensitive: false),

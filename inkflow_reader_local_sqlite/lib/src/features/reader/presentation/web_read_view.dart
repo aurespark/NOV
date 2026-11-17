@@ -266,8 +266,9 @@ class _WebReadViewState extends ConsumerState<WebReadView> {
         markers.add(ChapterMarker(title, 0));
       }
 
-      await LibraryDatabase.instance.insertOrUpdateCatalog(widget.book.id, chapterMaps);
+      // 先以章名重建（會刪除舊章節），再寫入含 chapterUrl 的完整資料；順序相反會把網址清掉
       await LibraryDatabase.instance.replaceChapters(widget.book.id, markers);
+      await LibraryDatabase.instance.insertOrUpdateCatalog(widget.book.id, chapterMaps);
       await _loadChaptersFromDb();
 
       if (!mounted) return;

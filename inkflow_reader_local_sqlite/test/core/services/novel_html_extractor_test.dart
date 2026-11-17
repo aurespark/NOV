@@ -43,6 +43,36 @@ void main() {
       expect(ChapterContentExtractor.extractText(html, selector: '[[bad'), isNotEmpty);
     });
 
+    test('正文直接放在 body 下（piaotia 型）：只取正文，不含導覽/工具列/頁尾', () {
+      const html = '''
+        <html><head><title>t</title></head>
+        <div id="guild"><a href="/">飘天文学</a> <a href="./">章节目录</a> <a href="/b">加入书架</a></div>
+        <div id="shop"><span>选择背景颜色：</span></div>
+        <H1><a href="/info">书名</a> 第二章 再从头</H1>
+        <div class="toplink"><a href="1.html">上一章</a> <a href="./">返回目录</a> <a href="3.html">下一章</a></div>
+        <table><tr><td><script>ad()</script></td></tr></table>
+        <br>&nbsp;&nbsp;&nbsp;&nbsp;第一段正文，楚阳睁开眼睛，只觉得浑身剧痛，四肢百骸仿佛被拆散重组。<br />
+        <br />&nbsp;&nbsp;&nbsp;&nbsp;可……这是怎么回事？<br />
+        <br />&nbsp;&nbsp;&nbsp;&nbsp;楚阳无语了，望着陌生的屋顶，脑海中一片混乱。<br />
+        <div class="bottomlink"><a href="3.html">下一章</a></div>
+        <div id="footer">重要声明：小说所有的文字均由网友发表，与本站立场无关。Copyright © 飘天文学</div>
+        </html>''';
+      expect(ChapterContentExtractor.extractText(html),
+          '第一段正文，楚阳睁开眼睛，只觉得浑身剧痛，四肢百骸仿佛被拆散重组。\n\n可……这是怎么回事？\n\n楚阳无语了，望着陌生的屋顶，脑海中一片混乱。');
+    });
+
+    test('每段一個 div（hetushu 型）：取整個容器並去除 cite/var 浮水印', () {
+      const html = '''
+        <div id="cbox"><div id="ctitle"><div class="title">第一章</div></div>
+        <div id="content"><h2>第一章</h2>
+          <div>第一段文字，夜幕低垂。</div>
+          <div>第二段文字，<cite>和_图_书</cite>寒風刺骨。</div>
+          <div>第三段<var>https://m.example.com</var>文字。</div>
+        </div></div>''';
+      expect(ChapterContentExtractor.extractText(html),
+          '第一章\n\n第一段文字，夜幕低垂。\n\n第二段文字，寒風刺骨。\n\n第三段文字。');
+    });
+
     test('同章分頁：只接受 123_2.html 這類延伸檔名，不把下一章當下一頁', () {
       const p1 = '<a href="123_2.html">下一頁</a><a href="124.html">下一章</a>';
       expect(ChapterContentExtractor.findNextPageUrl(p1, 'https://s.com/b/123.html'),

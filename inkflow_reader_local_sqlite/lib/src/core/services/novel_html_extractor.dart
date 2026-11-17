@@ -15,7 +15,10 @@ class ChapterContentExtractor {
   static const _junk =
       'script, style, noscript, iframe, ins, nav, header, footer, form, '
       'button, select, .ad, .ads, .adsbygoogle, .advertisement, .recommend, '
-      '[style*="display:none"], [style*="display: none"]';
+      '[style*="display:none"], [style*="display: none"], '
+      // 小說正文幾乎不用這些標籤；hetushu 等站拿來塞「和_图_书」與網址浮水印。
+      // shortcut: s/u 偶有正當的刪除線/底線用途，遇到站點真的用來排版再改成只刪含浮水印者
+      'cite, var, tt, code, samp, kbd, dfn, s, u';
   static const _inline = {'p', 'span', 'font', 'strong', 'b', 'i', 'em'};
   static const _block = {
     'p', 'div', 'br', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'article',
@@ -35,7 +38,21 @@ class ChapterContentExtractor {
       if (_linkTextLen(list) * 2 > list.text.trim().length) list.remove();
     }
     final buf = StringBuffer();
-    _walk(el, buf);
+    // 正文直接放在 <body> 下（jieqi 舊站如 piaotia）：只取 body 自身的文字，
+    // 不取導覽列、工具列、頁尾聲明等子區塊
+    if (el.localName == 'body' && _directTextLen(el) > 0) {
+      for (final node in el.nodes) {
+        if (node is dom.Text) {
+          buf.write(node.text.replaceAll(RegExp(r'[ \t\r\n]+'), ' '));
+        } else if (node is dom.Element && node.localName == 'br') {
+          buf.write('\n');
+        } else if (node is dom.Element && _inline.contains(node.localName)) {
+          _walk(node, buf);
+        }
+      }
+    } else {
+      _walk(el, buf);
+    }
     return buf
         .toString()
         .split('\n')
@@ -55,7 +72,7 @@ class ChapterContentExtractor {
     }
     dom.Element? best;
     var bestScore = 0;
-    for (final e in doc.querySelectorAll('div, article, section, td, dd, pre')) {
+    for (final e in doc.querySelectorAll('body, div, article, section, td, dd, pre')) {
       final s = _directTextLen(e);
       if (s > bestScore) {
         bestScore = s;
@@ -67,13 +84,20 @@ class ChapterContentExtractor {
     return (body != null && body.text.trim().isNotEmpty) ? body : null;
   }
 
-  /// 只算容器自己的文字節點與行內子元素，避免外層包裝容器分數虛高。
+  /// 只算容器自己的文字節點、行內子元素，以及「一段一個 div」的純文字子 div，
+  /// 避免外層包裝容器分數虛高，又能認出每段落各包一層 div 的站點。
   static int _directTextLen(dom.Element e) {
     var n = 0;
     for (final node in e.nodes) {
       if (node is dom.Text) {
         n += node.text.trim().length;
-      } else if (node is dom.Element && _inline.contains(node.localName)) {
+      } else if (node is dom.Element &&
+          (_inline.contains(node.localName) ||
+              // 段落 div 只有一段：含 <br> 的是正文容器本身，不能算成父層的段落
+              // body 的輸出只取自身文字，評分也不算子 div，否則會與真正的正文容器同分搶走
+              (e.localName != 'body' &&
+                  node.localName == 'div' &&
+                  node.querySelector('div, p, br, ul, ol, dl, table') == null))) {
         n += node.text.trim().length - _linkTextLen(node);
       }
     }

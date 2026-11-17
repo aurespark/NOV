@@ -32,6 +32,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
   final paginationEngine = PaginationEngine();
   final pages = <PageRange>[];
   Offset? pointerDown;
+  int pageAtDown = 0;
   Timer? saveTimer;
   int page = 0;
   int paginationGeneration = 0;
@@ -51,94 +52,70 @@ class _ReaderViewState extends ConsumerState<ReaderView>
     super.initState();
     _currentChapterIndex = widget.initialChapterIndex;
     WidgetsBinding.instance.addObserver(this);
+    if (_isWebBook && _currentChapterIndex + 1 < widget.chapters.length) {
+      unawaited(_chapterText(_currentChapterIndex + 1)); // 預載下一章
+    }
   }
 
   // GBK/Big5 站點需依 charset 解碼，改用共用下載器
   static Future<String> _fetchHtml(String url) => fetchNovelHtml(url);
 
-  /// 跨章換頁：切換至下一章
-  Future<void> _goToNextChapter() async {
-    if (_currentChapterIndex >= widget.chapters.length - 1) {
-      debugPrint('[ReaderNav] 🛑 邊界攔截: 已達全書最後一章 (第 ${_currentChapterIndex + 1}/${widget.chapters.length} 章)');
+  bool get _isWebBook => widget.book.sourceType == BookSourceType.web;
+
+  // 載入中的章節（含背景預載），同一章只抓一次
+  final _inflight = <int, Future<String>>{};
+  bool _loadingChapter = false;
+
+  Future<String> _chapterText(int index) {
+    return _inflight[index] ??= () async {
+      try {
+        final db = await LibraryDatabase.instance.database;
+        // 章節網址由 OnlineChapterService 從目錄（chapters.chapterUrl）讀取
+        return await OnlineChapterService(db: db).getChapterText(
+          bookId: widget.book.id.toString(),
+          chapterIndex: index,
+          chapterUrl: '',
+          fetcher: _fetchHtml,
+        );
+      } finally {
+        _inflight.remove(index);
+      }
+    }();
+  }
+
+  /// 跨章切換：上一章/下一章/目錄點選共用。toEnd 為 true 時停在該章最後一頁（往回翻時）。
+  Future<void> _loadChapter(int index, {bool toEnd = false}) async {
+    if (index < 0 || index >= widget.chapters.length) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已到達全書最後一章')),
+          SnackBar(content: Text(index < 0 ? '已是全書第一章' : '已到達全書最後一章')),
         );
       }
       return;
     }
-
-    final nextIndex = _currentChapterIndex + 1;
-    final nextChapter = widget.chapters[nextIndex];
-    debugPrint('[ReaderNav] ⏩ 觸發跨章跳轉: 第 ${_currentChapterIndex + 1} 章 ➡️ 第 ${nextIndex + 1} 章 (${nextChapter.title})');
-
-    setState(() => _currentChapterIndex = nextIndex);
-
-    // 取得章節網址
-    String targetUrl = '';
+    if (_loadingChapter) return; // 連點時忽略，避免同時載入多章
+    final chapter = widget.chapters[index];
+    debugPrint('[ReaderNav] 切換章節: 第 ${_currentChapterIndex + 1} 章 ➡️ 第 ${index + 1} 章 (${chapter.title})');
+    setState(() => _loadingChapter = true);
     try {
-      targetUrl = ((nextChapter as dynamic).url ?? (nextChapter as dynamic).link ?? '').toString();
-    } catch (_) {}
-
-    final db = await LibraryDatabase.instance.database;
-    final service = OnlineChapterService(db: db);
-    final nextText = await service.getChapterText(
-      bookId: widget.book.id.toString(),
-      chapterIndex: nextIndex,
-      chapterUrl: targetUrl,
-      fetcher: _fetchHtml,
-    );
-
-    // 注入新正文與標題，原有排版引擎會自動重算分頁，版面 100% 保持原本的原汁原味
-    ref.read(bookTextProvider.notifier).set(nextText);
-    ref.read(bookTitleProvider.notifier).set('${widget.book.title} - ${nextChapter.title}');
-
-    if (pageController.hasClients) {
-      pageController.jumpToPage(0);
+      final text = await _chapterText(index);
+      if (!mounted) return;
+      _currentChapterIndex = index;
+      // 新章從頭（或往回翻時從尾）開始，不沿用上一章的字元位置
+      pendingChapterOffset = toEnd ? (text.length - 1).clamp(0, text.length) : 0;
+      ref.read(bookTextProvider.notifier).set(text);
+      ref.read(bookTitleProvider.notifier).set('${widget.book.title} - ${chapter.title}');
+      _queueProgressSave();
+      // 背景預載下一章，翻到章末時多半已在快取
+      if (index + 1 < widget.chapters.length) unawaited(_chapterText(index + 1));
+    } finally {
+      if (mounted) setState(() => _loadingChapter = false);
     }
-    _queueProgressSave();
   }
 
-  /// 跨章換頁：倒退回上一章
-  Future<void> _goToPrevChapter() async {
-    if (_currentChapterIndex <= 0) {
-      debugPrint('[ReaderNav] 🛑 邊界攔截: 已達全書第一章首頁，拒絕後退');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已是全書第一章')),
-        );
-      }
-      return;
-    }
+  void _goToNextChapter() => _loadChapter(_currentChapterIndex + 1);
 
-    final prevIndex = _currentChapterIndex - 1;
-    final prevChapter = widget.chapters[prevIndex];
-    debugPrint('[ReaderNav] ⏮️ 觸發跨章倒退: 第 ${_currentChapterIndex + 1} 章 ➡️ 第 ${prevIndex + 1} 章 (${prevChapter.title})');
-
-    setState(() => _currentChapterIndex = prevIndex);
-
-    String targetUrl = '';
-    try {
-      targetUrl = ((prevChapter as dynamic).url ?? (prevChapter as dynamic).link ?? '').toString();
-    } catch (_) {}
-
-    final db = await LibraryDatabase.instance.database;
-    final service = OnlineChapterService(db: db);
-    final prevText = await service.getChapterText(
-      bookId: widget.book.id.toString(),
-      chapterIndex: prevIndex,
-      chapterUrl: targetUrl,
-      fetcher: _fetchHtml,
-    );
-
-    ref.read(bookTextProvider.notifier).set(prevText);
-    ref.read(bookTitleProvider.notifier).set('${widget.book.title} - ${prevChapter.title}');
-
-    if (pageController.hasClients) {
-      pageController.jumpToPage(0);
-    }
-    _queueProgressSave();
-  }
+  void _goToPrevChapter() => _loadChapter(_currentChapterIndex - 1, toEnd: true);
 
   @override
   void dispose() {
@@ -273,7 +250,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
       if (page > 0) {
         debugPrint('[ReaderNav] 📄 前往當前章上一頁: $page/${pages.length}');
         pageController.previousPage(
-          duration: const Duration(milliseconds: 240),
+          duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
         );
       } else {
@@ -286,7 +263,7 @@ class _ReaderViewState extends ConsumerState<ReaderView>
       if (page < pages.length - 1) {
         debugPrint('[ReaderNav] 📄 前往當前章下一頁: ${page + 2}/${pages.length}');
         pageController.nextPage(
-          duration: const Duration(milliseconds: 240),
+          duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
         );
       } else {
@@ -298,6 +275,12 @@ class _ReaderViewState extends ConsumerState<ReaderView>
   }
 
   void _jumpToChapter(ChapterMarker chapter) {
+    // 網路書一次只載一章，所有標記的 offset 都是 0：改為載入選中的章節
+    if (_isWebBook) {
+      final index = widget.chapters.indexOf(chapter);
+      if (index >= 0 && index != _currentChapterIndex) unawaited(_loadChapter(index));
+      return;
+    }
     final target = pages.indexWhere((range) => chapter.offset < range.end);
     if (target >= 0 && pageController.hasClients) {
       pageController.jumpToPage(target);
@@ -417,6 +400,17 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                       ],
                     ),
                   ),
+                  // 章節下載中的提示，避免換章時看起來「沒反應」
+                  SizedBox(
+                    height: 2,
+                    child: _loadingChapter
+                        ? LinearProgressIndicator(
+                            minHeight: 2,
+                            color: settings.textColor.withValues(alpha: .4),
+                            backgroundColor: Colors.transparent,
+                          )
+                        : null,
+                  ),
                   Expanded(
                     child: text.isEmpty
                         ? Center(
@@ -447,17 +441,26 @@ class _ReaderViewState extends ConsumerState<ReaderView>
                           )
                         : Listener(
                             behavior: HitTestBehavior.opaque,
-                            onPointerDown: (event) =>
-                                pointerDown = event.localPosition,
+                            onPointerDown: (event) {
+                              pointerDown = event.localPosition;
+                              pageAtDown = page;
+                            },
                             onPointerUp: (event) {
                               final start = pointerDown;
                               pointerDown = null;
-                              if (start != null &&
-                                  (event.localPosition - start).distance < 12) {
+                              if (start == null || _loadingChapter) return;
+                              final delta = event.localPosition - start;
+                              if (delta.distance < 12) {
                                 _tap(
                                   event.localPosition.dx / box.maxWidth,
                                   settings.tapPageTurnEnabled,
                                 );
+                              } else if (delta.dx.abs() > 60 &&
+                                  delta.dx.abs() > delta.dy.abs() * 1.5) {
+                                // PageView 在章首/章末滑不動，滑動手勢在此接手換章；
+                                // 用按下時的頁碼判斷，避免「滑到最後一頁」的同一下就換章
+                                if (delta.dx < 0 && pageAtDown >= pages.length - 1) _goToNextChapter();
+                                if (delta.dx > 0 && pageAtDown == 0) _goToPrevChapter();
                               }
                             },
                             onPointerCancel: (_) => pointerDown = null,

@@ -68,4 +68,26 @@ void main() {
       expect(pages[i - 1].end, pages[i].start);
     }
   });
+
+  test('以前頁長度推估探測長度，分頁結果與逐頁固定 4096 探測完全相同', () {
+    final text = List.generate(120, (i) => '第$i段：楚阳睁开眼睛，只觉得浑身剧痛，四肢百骸仿佛被拆散重组。').join('\n\n');
+    const style = TextStyle(fontSize: 22, height: 1.9);
+    const viewport = Size(390, 720);
+    final engine = PaginationEngine();
+    List<PageRange> run(int maxPages) {
+      final out = <PageRange>[];
+      var offset = 0;
+      while (offset < text.length) {
+        final b = engine.paginateBatch(
+          text: text, startOffset: offset, style: style, viewport: viewport,
+          textScaler: TextScaler.noScaling, maxPages: maxPages, timeBudget: const Duration(seconds: 5));
+        out.addAll(b.pages);
+        offset = b.nextOffset;
+      }
+      return out;
+    }
+    final adaptive = run(1000); // 同一批內沿用推估的探測長度
+    final fixed = run(1); // 每批只排一頁 → 每頁都從 4096 開始探測
+    expect(adaptive.map((p) => '${p.start}-${p.end}'), fixed.map((p) => '${p.start}-${p.end}'));
+  });
 }

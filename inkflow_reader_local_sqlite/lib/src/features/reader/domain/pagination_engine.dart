@@ -25,6 +25,8 @@ class PaginationEngine {
     final stopwatch = Stopwatch()..start();
     final pages = <PageRange>[];
     var offset = startOffset.clamp(0, text.length);
+    // 每頁只需約數百字；以前一頁長度推估探測長度，比固定 4096 字少排版約 10 倍
+    var probe = 4096;
     while (offset < text.length &&
         pages.length < maxPages &&
         (pages.isEmpty || stopwatch.elapsed < timeBudget)) {
@@ -34,8 +36,10 @@ class PaginationEngine {
         style,
         viewport,
         textScaler,
+        probe,
       );
       pages.add(PageRange(offset, end));
+      probe = ((end - offset) * 3 ~/ 2).clamp(256, 4096);
       offset = end;
     }
     return PaginationBatch(pages, offset, offset >= text.length);
@@ -47,10 +51,11 @@ class PaginationEngine {
     TextStyle style,
     Size viewport,
     TextScaler textScaler,
+    int firstProbe,
   ) {
-    // ponytail: 4096 is only the first probe; it expands when one page needs
-    // more text, so correctness does not depend on a fixed characters-per-page.
-    var probeLength = 4096;
+    // The first probe is only a guess; it doubles when one page needs more
+    // text, so correctness does not depend on a fixed characters-per-page.
+    var probeLength = firstProbe;
     while (true) {
       final probeEnd = (start + probeLength).clamp(0, text.length);
       final probe = text.substring(start, probeEnd);
